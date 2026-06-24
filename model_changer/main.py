@@ -1,7 +1,9 @@
 """Aplicación FastAPI del gestor de modelos."""
 import os
 import logging
+import shlex
 from pathlib import Path
+from typing import List
 
 import yaml
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -48,6 +50,18 @@ def status_to_dict(status):
     }
 
 
+def _parse_extra_args(value: str) -> List[str]:
+    """Convierte una cadena de argumentos extra en una lista."""
+    if not value or not value.strip():
+        return []
+    # Soporta tanto líneas separadas como espacios (estilo shell)
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    result = []
+    for line in lines:
+        result.extend(shlex.split(line))
+    return result
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     models = manager.list_models()
@@ -71,6 +85,31 @@ async def api_models():
 @app.get("/api/status")
 async def api_status():
     return status_to_dict(manager.status())
+
+
+@app.get("/api/profile/{model_name}")
+async def api_get_profile(model_name: str):
+    return {"model": model_name, "profile": manager.get_profile(model_name)}
+
+
+@app.post("/api/profile/{model_name}")
+async def api_set_profile(
+    model_name: str,
+    device: str = Form("gpu"),
+    n_gpu_layers: int = Form(999),
+    ctx_size: int = Form(8192),
+    threads: int = Form(8),
+    extra_args: str = Form(""),
+):
+    profile = {
+        "device": device.lower(),
+        "n_gpu_layers": n_gpu_layers,
+        "ctx_size": ctx_size,
+        "threads": threads,
+        "extra_args": _parse_extra_args(extra_args),
+    }
+    manager.set_profile(model_name, profile)
+    return {"ok": True, "model": model_name, "profile": profile}
 
 
 @app.post("/api/switch")
@@ -108,6 +147,13 @@ async def fragment_status():
 @app.get("/fragments/models", response_class=HTMLResponse)
 async def fragment_models():
     return HTMLResponse(_render_models_fragment(manager.list_models()))
+
+
+@app.get("/fragments/profile-form/{model_name}", response_class=HTMLResponse)
+async def fragment_profile_form(model_name: str):
+    profile = manager.get_profile(model_name)
+    extra = "\n".join(profile.get("extra_args", []))
+    return HTMLResponse(_render_profile_form(model_name, profile, extra))
 
 
 def _render_status(status):
@@ -150,22 +196,93 @@ def _render_models_fragment(models):
         return '<div class="col-span-full text-gray-400">No se encontraron modelos .gguf en la carpeta configurada.</div>'
     cards = []
     for m in models:
+        profile = manager.get_profile(m)
+        device = profile.get("device", "gpu").upper()
+        ngl = profile.get("n_gpu_layers", 999)
+        ctx = profile.get("ctx_size", 8192)
         cards.append(f"""
-        <div class="model-card bg-gray-800 border border-gray-700 rounded-xl p-4 hover:border-green-500 transition">
-            <div class="flex items-start justify-between">
+        <div class="model-card bg-gray-800 border border-gray-700 rounded-xl p-4 hover:border-green-500 transition" id="model-card-{m}">
+            <div class="flex items-start justify-between mb-3">
                 <div>
                     <h3 class="font-semibold text-green-300 break-all">{m}</h3>
+                    <div class="text-xs text-gray-400 mt-1 flex gap-2 flex-wrap">
+                        <span class="px-2 py-0.5 bg-gray-700 rounded">{device}</span>
+                        <span class="px-2 py-0.5 bg-gray-700 rounded">NGL: {ngl}</span>
+                        <span class="px-2 py-0.5 bg-gray-700 rounded">CTX: {ctx}</span>
+                    </div>
                 </div>
             </div>
-            <form hx-post="/api/switch" hx-target="#status-panel" hx-swap="innerHTML"
-                  class="mt-4" onsubmit="htmx.trigger('#status-panel','load')">
-                <input type="hidden" name="model" value="{m}">
-                <button type="submit"
-                        class="w-full py-2 bg-green-600 hover:bg-green-500 rounded-lg font-medium transition">
-                    ▶ Cargar modelo
+            <div class="flex gap-2">
+                <button hx-get="/fragments/profile-form/{m}" hx-target="#profile-modal-content" hx-swap="innerHTML"
+                        onclick="document.getElementById('profile-modal').classList.remove('hidden')"
+                        class="flex-1 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition text-sm">
+                    ⚙ Configurar
                 </button>
-            </form>
+                <form hx-post="/api/switch" hx-target="#status-panel" hx-swap="innerHTML"
+                      class="flex-[2]" onsubmit="htmx.trigger('#status-panel','load')">
+                    <input type="hidden" name="model" value="{m}">
+                    <button type="submit"
+                            class="w-full py-2 bg-green-600 hover:bg-green-500 rounded-lg font-medium transition">
+                        ▶ Cargar
+                    </button>
+                </form>
+            </div>
         </div>
         """)
     return "\n".join(cards)
 
+
+def _render_profile_form(model_name: str, profile: dict, extra: str):
+    device = profile.get("device", "gpu")
+    gpu_selected = "selected" if device == "gpu" else ""
+    cpu_selected = "selected" if device == "cpu" else ""
+    return f"""
+    <form hx-post="/api/profile/{model_name}" hx-target="#profile-result" hx-swap="innerHTML"
+          onsubmit="setTimeout(() => htmx.trigger('#models-list','load'), 300)">
+        <h3 class="text-lg font-semibold text-green-300 mb-4 break-all">{model_name}</h3>
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Dispositivo</label>
+                <select name="device" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                    <option value="gpu" {gpu_selected}>GPU (CUDA)</option>
+                    <option value="cpu" {cpu_selected}>CPU</option>
+                </select>
+            </div>
+            <div class="grid grid-cols-3 gap-3">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Capas GPU</label>
+                    <input type="number" name="n_gpu_layers" value="{profile.get('n_gpu_layers', 999)}"
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Contexto</label>
+                    <input type="number" name="ctx_size" value="{profile.get('ctx_size', 8192)}"
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Hilos</label>
+                    <input type="number" name="threads" value="{profile.get('threads', 8)}"
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Argumentos extra (uno por línea)</label>
+                <textarea name="extra_args" rows="3"
+                          class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white font-mono text-sm"
+                          placeholder="--flash-attn&#10;--mlock">{extra}</textarea>
+            </div>
+        </div>
+        <div id="profile-result" class="mt-3"></div>
+        <div class="flex gap-2 mt-4">
+            <button type="button"
+                    onclick="document.getElementById('profile-modal').classList.add('hidden')"
+                    class="flex-1 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition">
+                Cancelar
+            </button>
+            <button type="submit"
+                    class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition">
+                💾 Guardar
+            </button>
+        </div>
+    </form>
+    """

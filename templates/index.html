@@ -8,8 +8,6 @@
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <style>
         .model-card.active { border-color: #22c55e; background-color: #052e16; }
-        .htmx-indicator { display: none; }
-        .htmx-request .htmx-indicator { display: inline; }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen">
@@ -49,6 +47,15 @@
         </section>
     </div>
 
+    <!-- Modal de configuración -->
+    <div id="profile-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl p-6 max-w-md w-full border border-gray-700 shadow-2xl">
+            <div id="profile-modal-content">
+                <div class="text-gray-400">Cargando configuración...</div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Enlace al backend usando la IP/hostname desde la que se abre el panel
         document.getElementById('llama-ui-link').href = `http://${window.location.hostname}:{{ config.llama_port }}`;
@@ -59,6 +66,13 @@
             if (elt && elt.tagName === 'FORM' && elt.getAttribute('hx-post') === '/api/switch') {
                 document.querySelectorAll('.model-card').forEach(c => c.classList.remove('active'));
                 elt.closest('.model-card').classList.add('active');
+            }
+        });
+
+        // Cerrar modal al hacer clic fuera
+        document.getElementById('profile-modal').addEventListener('click', function(evt) {
+            if (evt.target === this) {
+                this.classList.add('hidden');
             }
         });
     </script>

@@ -8,6 +8,7 @@ Diseñado para un Chuwi con **Ubuntu 24.04 + NVIDIA Tesla P40 + CUDA + llama.cpp
 
 - Lista todos los modelos `.gguf` que tengas en una carpeta.
 - Muestra el modelo que está cargado actualmente en `llama-server`.
+- Permite **configurar el arranque de cada modelo** por separado: CPU/GPU, capas en GPU, contexto, hilos y argumentos extra.
 - Permite **detener** el servidor y **arrancar** otro modelo con un solo clic.
 - Espera a que el nuevo modelo responda en `/health` antes de darlo por cargado.
 - Lleva logs de `llama-server` en `logs/`.
@@ -38,6 +39,7 @@ Diseñado para un Chuwi con **Ubuntu 24.04 + NVIDIA Tesla P40 + CUDA + llama.cpp
 ```
 Model-changer/
 ├── config.yaml              # Configuración principal
+├── model_profiles.yaml      # Perfiles de arranque por modelo
 ├── model_changer/
 │   ├── __init__.py
 │   ├── main.py              # FastAPI + interfaz web
@@ -80,6 +82,7 @@ llama_host: 0.0.0.0
 llama_port: 8080
 manager_host: 0.0.0.0
 manager_port: 8081
+profiles_path: ./model_profiles.yaml
 ```
 
 > **Consejo para la Tesla P40:** deja `n_gpu_layers: 999` para que cargue todas las capas en la GPU.
@@ -123,22 +126,57 @@ source venv/bin/activate
 python3 -m uvicorn model_changer.main:app --host 0.0.0.0 --port 8081
 ```
 
-## Configuración avanzada
+## Perfiles por modelo
 
-Puedes añadir en `config.yaml` argumentos extra para `llama-server`:
+Cada modelo puede tener su propia configuración de arranque en `model_profiles.yaml`. Si un modelo no tiene perfil propio, se usa el perfil `default`.
 
-```yaml
-extra_args:
-  - "--mlock"
-  - "--parallel"
-  - "2"
-```
-
-O como cadena:
+Ejemplo:
 
 ```yaml
-extra_args: "--mlock --parallel 2"
+default:
+  device: gpu
+  n_gpu_layers: 999
+  ctx_size: 8192
+  threads: 8
+  extra_args: []
+
+profiles:
+  Qwen3.5-9B-Q4_K_M.gguf:
+    device: gpu
+    n_gpu_layers: 999
+    ctx_size: 8192
+    threads: 8
+    extra_args:
+      - "--flash-attn"
+
+  DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf:
+    device: gpu
+    n_gpu_layers: 999
+    ctx_size: 4096
+    threads: 8
+    extra_args:
+      - "--flash-attn"
+      - "--mlock"
 ```
+
+### Campos disponibles
+
+| Campo | Descripción |
+|-------|-------------|
+| `device` | `gpu` o `cpu`. En modo `cpu` se fuerza `-ngl 0`. |
+| `n_gpu_layers` | Número de capas a cargar en la GPU. `999` fuerza todas. |
+| `ctx_size` | Tamaño del contexto (`-c`). |
+| `threads` | Número de hilos (`-t`). |
+| `extra_args` | Lista de argumentos extra de `llama-server` (uno por línea). |
+
+### Optimizaciones recomendadas para Tesla P40
+
+- `device: gpu` con `n_gpu_layers: 999` para cargar todo el modelo en la GPU.
+- `--flash-attn` (o `-fa`) para ahorrar VRAM en modelos grandes.
+- `--mlock` para evitar que el sistema mueva el modelo a swap.
+- `--no-mmap` si tienes suficiente RAM y quieres cargar todo en memoria.
+
+También puedes editar los perfiles directamente desde el panel web pulsando **Configurar** en cada tarjeta de modelo.
 
 ## Solución de problemas
 

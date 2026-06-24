@@ -1,4 +1,4 @@
-"""Gestión del proceso llama-server."""
+"""Gestión del proceso llama-server con perfiles por modelo."""
 import os
 import time
 import logging
@@ -25,6 +25,8 @@ class ServerStatus:
 class LlamaServerManager:
     def __init__(self, config_path: str = "config.yaml"):
         self.config = self._load_config(config_path)
+        self.profiles_path = Path(self.config.get("profiles_path", "model_profiles.yaml"))
+        self.profiles = self._load_profiles(self.profiles_path)
         self.process: Optional[subprocess.Popen] = None
         self.current_model: Optional[str] = None
         self.start_time: Optional[float] = None
@@ -38,6 +40,39 @@ class LlamaServerManager:
     def _load_config(self, path: str) -> Dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
+
+    def _load_profiles(self, path: Path) -> Dict[str, Any]:
+        if not path.exists():
+            self.logger.warning("No se encontró archivo de perfiles: %s", path)
+            return {"default": {}, "profiles": {}}
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {"default": {}, "profiles": {}}
+
+    def _save_profiles(self) -> None:
+        with open(self.profiles_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(self.profiles, f, sort_keys=False, allow_unicode=True)
+
+    def get_profile(self, model_name: str) -> Dict[str, Any]:
+        """Devuelve el perfil de un modelo mezclado con los valores por defecto."""
+        default = self.profiles.get("default", {})
+        profile = self.profiles.get("profiles", {}).get(model_name, {})
+        merged = {**default, **profile}
+
+        # Fallback a valores globales de config.yaml si no hay perfil
+        merged.setdefault("device", "gpu")
+        merged.setdefault("n_gpu_layers", self.config.get("n_gpu_layers", 999))
+        merged.setdefault("ctx_size", self.config.get("ctx_size", 8192))
+        merged.setdefault("threads", self.config.get("threads", 8))
+        merged.setdefault("extra_args", [])
+
+        return merged
+
+    def set_profile(self, model_name: str, profile: Dict[str, Any]) -> None:
+        """Guarda o actualiza el perfil de un modelo."""
+        if "profiles" not in self.profiles:
+            self.profiles["profiles"] = {}
+        self.profiles["profiles"][model_name] = profile
+        self._save_profiles()
 
     @property
     def base_url(self) -> str:
@@ -113,19 +148,29 @@ class LlamaServerManager:
         bin_path = Path(self.config["llama_server_bin"])
         models_dir = Path(self.config["models_dir"])
         model_path = models_dir / model_name
+        profile = self.get_profile(model_name)
+
+        device = str(profile.get("device", "gpu")).lower()
+        n_gpu_layers = int(profile.get("n_gpu_layers", 999))
+        ctx_size = int(profile.get("ctx_size", 8192))
+        threads = int(profile.get("threads", 8))
 
         cmd = [
             str(bin_path),
             "-m", str(model_path),
             "--host", str(self.config.get("llama_host", "127.0.0.1")),
             "--port", str(self.config.get("llama_port", 8080)),
-            "-c", str(self.config.get("ctx_size", 8192)),
-            "-ngl", str(self.config.get("n_gpu_layers", 999)),
-            "-t", str(self.config.get("threads", 8)),
+            "-c", str(ctx_size),
+            "-t", str(threads),
         ]
 
-        # Argumentos extra opcionales del usuario
-        extra = self.config.get("extra_args", [])
+        if device == "cpu":
+            cmd.extend(["-ngl", "0"])
+        else:
+            cmd.extend(["-ngl", str(n_gpu_layers)])
+
+        # Argumentos extra opcionales del perfil
+        extra = profile.get("extra_args", [])
         if isinstance(extra, str):
             extra = extra.split()
         cmd.extend(extra)
