@@ -53,9 +53,9 @@ async def index(request: Request):
     models = manager.list_models()
     status = manager.status()
     return templates.TemplateResponse(
+        request,
         "index.html",
-        {
-            "request": request,
+        context={
             "models": models,
             "status": status,
             "config": raw_config,
