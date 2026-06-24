@@ -150,7 +150,7 @@ async def api_set_profile(model_name: str, profile: dict = Form(...)):
     raise HTTPException(status_code=400, detail="Usa /fragments/profile-form/{model_name} con POST")
 
 
-@app.post("/api/profile-save/{model_name}")
+@app.post("/api/profile-save/{model_name}", response_class=HTMLResponse)
 async def api_save_profile(
     model_name: str,
     device: str = Form("gpu"),
@@ -173,7 +173,13 @@ async def api_save_profile(
         defrag_thold, verbose, parallel, extra_args, mmap, mlock, flash_attn
     )
     manager.set_profile(model_name, profile)
-    return {"ok": True, "model": model_name, "profile": profile}
+    return HTMLResponse(f"""
+        <div class="text-sm text-green-400 mb-2">✅ Guardado correctamente.</div>
+        <script>
+            document.getElementById('profile-modal').classList.add('hidden');
+            htmx.trigger('#models-list', 'load');
+        </script>
+    """)
 
 
 @app.get("/api/command/{model_name}")
@@ -338,9 +344,7 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
         ctx_suggest = 16384
 
     return f"""
-    <form hx-post="/api/profile-save/{model_name}" hx-target="#profile-result" hx-swap="innerHTML"
-          onsubmit="setTimeout(() => htmx.trigger('#models-list','load'), 300)"
-          hx-on="htmx:afterRequest: if(event.detail.successful) {{ document.getElementById('profile-modal').classList.add('hidden'); }}">
+    <form hx-post="/api/profile-save/{model_name}" hx-target="#profile-result" hx-swap="innerHTML">
         <h3 class="text-lg font-semibold text-green-300 mb-1 break-all">{model_name}</h3>
         <p class="text-xs text-gray-400 mb-4">VRAM detectada: {vram_gb} GB · RAM total: {ram_gb} GB</p>
 
