@@ -77,7 +77,6 @@ def _profile_from_form(
     batch_size: int,
     port: int,
     host: str,
-    defrag_thold: float,
     verbose: int,
     parallel: int,
     extra_args: str,
@@ -96,7 +95,6 @@ def _profile_from_form(
         "mmap": _to_bool(mmap),
         "mlock": _to_bool(mlock),
         "flash_attn": _to_bool(flash_attn),
-        "defrag_thold": defrag_thold,
         "verbose": verbose,
         "parallel": parallel,
         "extra_args": _parse_extra_args(extra_args),
@@ -160,7 +158,7 @@ async def api_save_profile(
     batch_size: int = Form(512),
     port: int = Form(8080),
     host: str = Form("0.0.0.0"),
-    defrag_thold: float = Form(0.1),
+
     verbose: int = Form(2),
     parallel: int = Form(4),
     extra_args: str = Form(""),
@@ -170,7 +168,7 @@ async def api_save_profile(
 ):
     profile = _profile_from_form(
         device, n_gpu_layers, ctx_size, threads, batch_size, port, host,
-        defrag_thold, verbose, parallel, extra_args, mmap, mlock, flash_attn
+        verbose, parallel, extra_args, mmap, mlock, flash_attn
     )
     manager.set_profile(model_name, profile)
     return HTMLResponse(f'<div class="text-sm text-green-400 mb-2">✅ Guardado correctamente.</div>')
@@ -399,14 +397,8 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-3">
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">Defrag thold</label>
-                    <input type="number" step="0.05" name="defrag_thold" value="{profile.get('defrag_thold', 0.1)}"
-                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">Verbose</label>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Verbose</label>
                     <select name="verbose" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
                         <option value="0" {"selected" if profile.get('verbose', 2) == 0 else ""}>0 - errores</option>
                         <option value="1" {"selected" if profile.get('verbose', 2) == 1 else ""}>1 - warnings</option>

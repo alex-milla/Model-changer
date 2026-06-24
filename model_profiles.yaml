@@ -14,7 +14,6 @@ default:
   mmap: false
   mlock: false
   flash_attn: false
-  defrag_thold: 0.1
   verbose: 2
   parallel: 4
   extra_args: []

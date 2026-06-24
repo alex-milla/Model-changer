@@ -26,13 +26,13 @@ class ServerStatus:
 
 class LlamaServerManager:
     def __init__(self, config_path: str = "config.yaml"):
+        self.logger = logging.getLogger("model_changer")
         self.config = self._load_config(config_path)
         self.profiles_path = Path(self.config.get("profiles_path", "model_profiles.yaml"))
         self.profiles = self._load_profiles(self.profiles_path)
         self.process: Optional[subprocess.Popen] = None
         self.current_model: Optional[str] = None
         self.start_time: Optional[float] = None
-        self.logger = logging.getLogger("model_changer")
 
         # Asegurar directorio de logs
         log_dir = Path(self.config.get("log_dir", "./logs"))
@@ -76,7 +76,6 @@ class LlamaServerManager:
         merged.setdefault("mmap", False)
         merged.setdefault("mlock", False)
         merged.setdefault("flash_attn", False)
-        merged.setdefault("defrag_thold", 0.1)
         merged.setdefault("verbose", 2)
         merged.setdefault("parallel", 4)
         merged.setdefault("extra_args", [])
@@ -241,7 +240,6 @@ class LlamaServerManager:
         mmap = bool(profile.get("mmap", False))
         mlock = bool(profile.get("mlock", False))
         flash_attn = bool(profile.get("flash_attn", False))
-        defrag_thold = float(profile.get("defrag_thold", 0.1))
         verbose = int(profile.get("verbose", 2))
         parallel = int(profile.get("parallel", 4))
 
@@ -268,7 +266,6 @@ class LlamaServerManager:
         if flash_attn:
             cmd.append("--flash-attn")
 
-        cmd.extend(["--defrag-thold", str(defrag_thold)])
 
         # Verbosidad: -v o --verbose (llama-server no acepta -vv)
         if verbose > 0:
@@ -286,7 +283,7 @@ class LlamaServerManager:
         """Compatibilidad con llamadas antiguas."""
         return self.build_command(model_name)
 
-    def start(self, model_name: str, timeout: int = 60) -> ServerStatus:
+    def start(self, model_name: str, timeout: int = 120) -> ServerStatus:
         if not model_name.endswith(".gguf"):
             model_name += ".gguf"
 

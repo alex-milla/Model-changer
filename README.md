@@ -144,7 +144,6 @@ default:
   mmap: false
   mlock: false
   flash_attn: false
-  defrag_thold: 0.1
   verbose: 2
   parallel: 4
   extra_args: []
@@ -183,7 +182,6 @@ profiles:
 | `mmap` | `true` para `--mmap`, `false` para `--no-mmap`. |
 | `mlock` | `true` para `--mlock`. |
 | `flash_attn` | `true` para `--flash-attn`. Se fuerza a `false` en GPUs Pascal. |
-| `defrag_thold` | Umbral de defragmentación KV cache (`--defrag-thold`). |
 | `verbose` | Nivel de verbose: 0 (nada), 1+ (`--verbose`). |
 | `parallel` | Slots paralelos (`--parallel`). |
 | `extra_args` | Lista de argumentos extra de `llama-server` (uno por línea). |
@@ -201,7 +199,6 @@ Configuración recomendada:
   - VRAM >= 16 GB: hasta 16384
 - `--mlock` para evitar que el sistema mueva el modelo a swap.
 - `--no-mmap` para cargar el modelo completo en RAM antes de pasarlo a la GPU (recomendado si el bus PCIe es lento).
-- `--defrag-thold 0.1` para mantener la KV cache defragmentada.
 
 También puedes editar los perfiles directamente desde el panel web pulsando **Configurar** en cada tarjeta de modelo. El panel muestra el comando final que se ejecutará.
 
