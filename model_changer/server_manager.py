@@ -46,7 +46,11 @@ class LlamaServerManager:
             self.logger.warning("No se encontró archivo de perfiles: %s", path)
             return {"default": {}, "profiles": {}}
         with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {"default": {}, "profiles": {}}
+            data = yaml.safe_load(f) or {}
+        data.setdefault("default", {})
+        if data.get("profiles") is None:
+            data["profiles"] = {}
+        return data
 
     def _save_profiles(self) -> None:
         with open(self.profiles_path, "w", encoding="utf-8") as f:
@@ -54,8 +58,9 @@ class LlamaServerManager:
 
     def get_profile(self, model_name: str) -> Dict[str, Any]:
         """Devuelve el perfil de un modelo mezclado con los valores por defecto."""
-        default = self.profiles.get("default", {})
-        profile = self.profiles.get("profiles", {}).get(model_name, {})
+        default = self.profiles.get("default") or {}
+        profiles = self.profiles.get("profiles") or {}
+        profile = profiles.get(model_name, {})
         merged = {**default, **profile}
 
         # Fallback a valores globales de config.yaml si no hay perfil
