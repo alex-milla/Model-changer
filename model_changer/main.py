@@ -5,6 +5,7 @@ import shlex
 from pathlib import Path
 from typing import List
 
+import psutil
 import yaml
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse
