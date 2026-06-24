@@ -270,9 +270,9 @@ class LlamaServerManager:
 
         cmd.extend(["--defrag-thold", str(defrag_thold)])
 
-        # Verbosidad: -v, -vv, -vvv
+        # Verbosidad: -v o --verbose (llama-server no acepta -vv)
         if verbose > 0:
-            cmd.append("-" + "v" * min(verbose, 3))
+            cmd.append("--verbose")
 
         # Argumentos extra opcionales del perfil
         extra = profile.get("extra_args", [])

@@ -184,7 +184,7 @@ profiles:
 | `mlock` | `true` para `--mlock`. |
 | `flash_attn` | `true` para `--flash-attn`. Se fuerza a `false` en GPUs Pascal. |
 | `defrag_thold` | Umbral de defragmentación KV cache (`--defrag-thold`). |
-| `verbose` | Nivel de verbose: 0 (nada), 1 (`-v`), 2 (`-vv`), 3 (`-vvv`). |
+| `verbose` | Nivel de verbose: 0 (nada), 1+ (`--verbose`). |
 | `parallel` | Slots paralelos (`--parallel`). |
 | `extra_args` | Lista de argumentos extra de `llama-server` (uno por línea). |
 
