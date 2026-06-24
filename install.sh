@@ -20,18 +20,22 @@ fi
 
 cd "$PROJECT_DIR"
 
+# Asegurar que el proyecto pertenece al usuario que ejecutará el servicio
+chown -R "$SERVICE_USER":"$SERVICE_USER" "$PROJECT_DIR"
+
 echo "==> Instalando dependencias del sistema"
 apt-get update
 apt-get install -y python3-venv python3-pip
 
 echo "==> Creando entorno virtual de Python"
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+if [ -d "venv" ]; then
+    rm -rf venv
+fi
+sudo -u "$SERVICE_USER" python3 -m venv venv
+sudo -u "$SERVICE_USER" venv/bin/pip install --upgrade pip
+sudo -u "$SERVICE_USER" venv/bin/pip install -r requirements.txt
 
 echo "==> Preparando directorios"
-# Crear logs con el usuario que ejecutará el servicio
 sudo -u "$SERVICE_USER" mkdir -p logs
 
 echo "==> Instalando servicio systemd"
