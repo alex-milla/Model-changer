@@ -727,7 +727,7 @@ def _render_models_page(status, models):
     models_html = _render_models_fragment(models)
     return f"""
     <div class="space-y-6">
-        <section class="bg-gray-800 rounded-xl p-6 shadow-lg">
+        <section id="status-panel" class="bg-gray-800 rounded-xl p-6 shadow-lg">
             {status_html}
         </section>
 
