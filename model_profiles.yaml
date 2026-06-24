@@ -16,6 +16,7 @@ default:
   flash_attn: false
   jinja: false
   special: false
+  defrag_thold: 0.1
   verbose: 2
   parallel: 4
   extra_args: []

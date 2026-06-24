@@ -78,6 +78,7 @@ class LlamaServerManager:
         merged.setdefault("flash_attn", False)
         merged.setdefault("jinja", False)
         merged.setdefault("special", False)
+        merged.setdefault("defrag_thold", 0.1)
         merged.setdefault("verbose", 2)
         merged.setdefault("parallel", 4)
         merged.setdefault("extra_args", [])
@@ -244,6 +245,7 @@ class LlamaServerManager:
         flash_attn = bool(profile.get("flash_attn", False))
         jinja = bool(profile.get("jinja", False))
         special = bool(profile.get("special", False))
+        defrag_thold = float(profile.get("defrag_thold", 0.1))
         verbose = int(profile.get("verbose", 2))
         parallel = int(profile.get("parallel", 4))
 
@@ -273,6 +275,8 @@ class LlamaServerManager:
             cmd.append("--jinja")
         if special:
             cmd.append("--special")
+
+        cmd.extend(["--defrag-thold", str(defrag_thold)])
 
         # Verbosidad: -v o --verbose (llama-server no acepta -vv)
         if verbose > 0:

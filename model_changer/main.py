@@ -85,6 +85,7 @@ def _profile_from_form(
     flash_attn: str = Form(""),
     jinja: str = Form(""),
     special: str = Form(""),
+    defrag_thold: float = Form(0.1),
 ) -> dict:
     return {
         "device": device.lower(),
@@ -99,6 +100,7 @@ def _profile_from_form(
         "flash_attn": _to_bool(flash_attn),
         "jinja": _to_bool(jinja),
         "special": _to_bool(special),
+        "defrag_thold": defrag_thold,
         "verbose": verbose,
         "parallel": parallel,
         "extra_args": _parse_extra_args(extra_args),
@@ -171,10 +173,11 @@ async def api_save_profile(
     flash_attn: str = Form(""),
     jinja: str = Form(""),
     special: str = Form(""),
+    defrag_thold: float = Form(0.1),
 ):
     profile = _profile_from_form(
         device, n_gpu_layers, ctx_size, threads, batch_size, port, host,
-        verbose, parallel, extra_args, mmap, mlock, flash_attn, jinja, special
+        verbose, parallel, extra_args, mmap, mlock, flash_attn, jinja, special, defrag_thold
     )
     manager.set_profile(model_name, profile)
     return HTMLResponse(f'<div class="text-sm text-green-400 mb-2">✅ Guardado correctamente.</div>')
@@ -405,8 +408,15 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
                 </div>
             </div>
 
-            <div>
-                <label class="block text-sm text-gray-400 mb-1">Verbose</label>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Defrag thold</label>
+                    <input type="number" step="0.05" name="defrag_thold" value="{profile.get('defrag_thold', 0.1)}"
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
+                           title="0.0 desactivado. Algunas versiones de llama.cpp lo marcan como deprecated.">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Verbose</label>
                     <select name="verbose" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
                         <option value="0" {"selected" if profile.get('verbose', 2) == 0 else ""}>0 - errores</option>
                         <option value="1" {"selected" if profile.get('verbose', 2) == 1 else ""}>1 - warnings</option>

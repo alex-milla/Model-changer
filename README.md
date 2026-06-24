@@ -184,6 +184,7 @@ profiles:
 | `flash_attn` | `true` para `--flash-attn`. Se fuerza a `false` en GPUs Pascal. |
 | `jinja` | `true` para `--jinja`. Necesario para algunos modelos como Gemma 4. |
 | `special` | `true` para `--special`. Maneja tokens especiales. |
+| `defrag_thold` | Umbral de defragmentación KV cache (`--defrag-thold`). Puede estar deprecated. |
 | `verbose` | Nivel de verbose: 0 (nada), 1+ (`--verbose`). |
 | `parallel` | Slots paralelos (`--parallel`). |
 | `extra_args` | Lista de argumentos extra de `llama-server` (uno por línea). |
