@@ -233,6 +233,14 @@ async def api_switch(model: str = Form(...)):
     return status_to_dict(result)
 
 
+@app.post("/fragments/switch", response_class=HTMLResponse)
+async def fragment_switch(model: str = Form(...)):
+    if not model:
+        return HTMLResponse(_render_status(manager.status()))
+    result = manager.start(model)
+    return HTMLResponse(_render_status(result))
+
+
 @app.post("/api/stop")
 async def api_stop():
     result = manager.stop()
@@ -362,8 +370,8 @@ def _render_models_fragment(models):
                         class="flex-1 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition text-sm">
                     ⚙ Configurar
                 </button>
-                <form hx-post="/api/switch" hx-target="#status-panel" hx-swap="innerHTML"
-                      class="flex-[2]" onsubmit="htmx.trigger('#status-panel','load')">
+                <form hx-post="/fragments/switch" hx-target="#status-panel" hx-swap="innerHTML"
+                      class="flex-[2]">
                     <input type="hidden" name="model" value="{m}">
                     <button type="submit"
                             class="w-full py-2 bg-green-600 hover:bg-green-500 rounded-lg font-medium transition">
