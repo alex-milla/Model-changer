@@ -150,6 +150,23 @@ async def api_gpu_status():
     }
 
 
+@app.get("/api/dashboard/gpu")
+async def api_dashboard_gpu():
+    return manager.get_gpu_metrics()
+
+
+@app.get("/api/dashboard/system")
+async def api_dashboard_system():
+    mem = psutil.virtual_memory()
+    cpu = psutil.cpu_percent(interval=0.1)
+    return {
+        "cpu_percent": cpu,
+        "ram_used_gb": round(mem.used / (1024 ** 3), 2),
+        "ram_total_gb": round(mem.total / (1024 ** 3), 2),
+        "ram_percent": mem.percent,
+    }
+
+
 @app.post("/api/gpu-reset")
 async def api_gpu_reset():
     return manager.reset_gpu_modules()
@@ -257,6 +274,28 @@ async def fragment_profile_form(model_name: str):
 @app.get("/fragments/diagnostics", response_class=HTMLResponse)
 async def fragment_diagnostics():
     return HTMLResponse(_render_diagnostics())
+
+
+@app.get("/fragments/dashboard-page", response_class=HTMLResponse)
+async def fragment_dashboard_page():
+    return HTMLResponse(_render_dashboard_page())
+
+
+@app.get("/fragments/dashboard", response_class=HTMLResponse)
+async def fragment_dashboard():
+    return HTMLResponse(_render_dashboard())
+
+
+@app.get("/fragments/models-page", response_class=HTMLResponse)
+async def fragment_models_page():
+    status = manager.status()
+    models = manager.list_models()
+    return HTMLResponse(_render_models_page(status, models))
+
+
+@app.get("/fragments/diagnostics-page", response_class=HTMLResponse)
+async def fragment_diagnostics_page():
+    return HTMLResponse(_render_diagnostics_page())
 
 
 def _render_status(status):
@@ -564,4 +603,154 @@ def _render_diagnostics():
             <p>VRAM: {gpu.get('vram_mb') or '?'} MB · Pascal: {'Sí' if gpu.get('is_pascal') else 'No'}</p>
         </div>
     </div>
+    """
+
+
+def _render_dashboard_page():
+    return """
+    <div hx-get="/fragments/dashboard" hx-trigger="load, every 2s" hx-swap="innerHTML">
+        <div class="animate-pulse text-gray-400">Cargando dashboard...</div>
+    </div>
+    """
+
+
+def _render_dashboard():
+    gpu = manager.get_gpu_metrics()
+    system = manager.get_system_info()
+    if not gpu.get("available"):
+        return '<div class="text-red-400">No se pudo obtener métricas de la GPU.</div>'
+
+    vram_pct = int(gpu["vram_used_mb"] / gpu["vram_total_mb"] * 100) if gpu["vram_total_mb"] else 0
+    vram_gb = round(gpu["vram_used_mb"] / 1024, 1)
+    vram_total_gb = round(gpu["vram_total_mb"] / 1024, 1)
+
+    proc_rows = ""
+    for p in gpu.get("processes", []):
+        proc_rows += f"""
+        <tr class="border-b border-gray-700">
+            <td class="py-1 px-2 text-xs font-mono">{p.get('pid', '')}</td>
+            <td class="py-1 px-2 text-xs">{p.get('name', '')}</td>
+            <td class="py-1 px-2 text-xs text-right">{p.get('sm', '0')}%</td>
+            <td class="py-1 px-2 text-xs text-right">{p.get('mem', '0')}%</td>
+        </tr>
+        """
+    if not proc_rows:
+        proc_rows = '<tr><td colspan="4" class="py-2 px-2 text-xs text-gray-500">No hay procesos usando la GPU</td></tr>'
+
+    return f"""
+    <div class="space-y-4">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="bg-gray-800 rounded-xl p-4 border border-gray-700">
+                <div class="text-xs text-gray-400 mb-1">GPU</div>
+                <div class="text-2xl font-bold text-green-400">{gpu['utilization_gpu']}%</div>
+                <div class="w-full bg-gray-700 rounded-full h-2 mt-2">
+                    <div class="bg-green-500 h-2 rounded-full" style="width: {gpu['utilization_gpu']}%"></div>
+                </div>
+            </div>
+            <div class="bg-gray-800 rounded-xl p-4 border border-gray-700">
+                <div class="text-xs text-gray-400 mb-1">VRAM</div>
+                <div class="text-2xl font-bold text-blue-400">{vram_pct}%</div>
+                <div class="text-xs text-gray-500">{vram_gb} / {vram_total_gb} GB</div>
+                <div class="w-full bg-gray-700 rounded-full h-2 mt-2">
+                    <div class="bg-blue-500 h-2 rounded-full" style="width: {vram_pct}%"></div>
+                </div>
+            </div>
+            <div class="bg-gray-800 rounded-xl p-4 border border-gray-700">
+                <div class="text-xs text-gray-400 mb-1">Temperatura</div>
+                <div class="text-2xl font-bold text-yellow-400">{gpu['temperature_c']}°C</div>
+                <div class="text-xs text-gray-500">{gpu['name'] or 'GPU'}</div>
+            </div>
+            <div class="bg-gray-800 rounded-xl p-4 border border-gray-700">
+                <div class="text-xs text-gray-400 mb-1">Potencia</div>
+                <div class="text-2xl font-bold text-purple-400">{gpu['power_draw_w']:.1f}W</div>
+                <div class="text-xs text-gray-500">Límite: {gpu['power_limit_w']:.1f}W · {gpu['clock_mhz']} MHz</div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-gray-800 rounded-xl p-4 border border-gray-700">
+                <h3 class="text-sm font-semibold text-green-300 mb-3">Procesos en GPU</h3>
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="border-b border-gray-600 text-xs text-gray-400">
+                            <th class="py-1 px-2">PID</th>
+                            <th class="py-1 px-2">Proceso</th>
+                            <th class="py-1 px-2 text-right">SM</th>
+                            <th class="py-1 px-2 text-right">Mem</th>
+                        </tr>
+                    </thead>
+                    <tbody>{proc_rows}</tbody>
+                </table>
+            </div>
+
+            <div class="bg-gray-800 rounded-xl p-4 border border-gray-700">
+                <h3 class="text-sm font-semibold text-green-300 mb-3">Sistema</h3>
+                <div class="space-y-3">
+                    <div>
+                        <div class="flex justify-between text-xs text-gray-400 mb-1">
+                            <span>CPU</span>
+                            <span id="cpu-val">--%</span>
+                        </div>
+                        <div class="w-full bg-gray-700 rounded-full h-2">
+                            <div id="cpu-bar" class="bg-red-500 h-2 rounded-full" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs text-gray-400 mb-1">
+                            <span>RAM</span>
+                            <span id="ram-val">-- / -- GB</span>
+                        </div>
+                        <div class="w-full bg-gray-700 rounded-full h-2">
+                            <div id="ram-bar" class="bg-orange-500 h-2 rounded-full" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        fetch('/api/dashboard/system')
+            .then(r => r.json())
+            .then(data => {{
+                document.getElementById('cpu-val').textContent = data.cpu_percent + '%';
+                document.getElementById('cpu-bar').style.width = data.cpu_percent + '%';
+                document.getElementById('ram-val').textContent = data.ram_used_gb + ' / ' + data.ram_total_gb + ' GB';
+                document.getElementById('ram-bar').style.width = data.ram_percent + '%';
+            }})
+            .catch(() => {{}});
+    </script>
+    """
+
+
+def _render_models_page(status, models):
+    status_html = _render_status(status)
+    models_html = _render_models_fragment(models)
+    return f"""
+    <div class="space-y-6">
+        <section class="bg-gray-800 rounded-xl p-6 shadow-lg">
+            {status_html}
+        </section>
+
+        <section>
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold">Modelos disponibles</h2>
+                <button hx-get="/fragments/models" hx-target="#models-list" hx-swap="innerHTML"
+                        class="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded transition">
+                    🔄 Refrescar
+                </button>
+            </div>
+            <div id="models-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {models_html}
+            </div>
+        </section>
+    </div>
+    """
+
+
+def _render_diagnostics_page():
+    diagnostics_html = _render_diagnostics()
+    return f"""
+    <section class="bg-gray-800 rounded-xl p-6 shadow-lg">
+        {diagnostics_html}
+    </section>
     """

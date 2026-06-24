@@ -6,10 +6,11 @@ Diseñado para un Chuwi con **Ubuntu 24.04 + NVIDIA Tesla P40 + CUDA + llama.cpp
 
 ## ¿Qué hace?
 
-- Lista todos los modelos `.gguf` que tengas en una carpeta.
-- Muestra el modelo que está cargado actualmente en `llama-server`.
-- Permite **configurar el arranque de cada modelo** por separado: CPU/GPU, capas en GPU, contexto, hilos y argumentos extra.
-- Permite **detener** el servidor y **arrancar** otro modelo con un solo clic.
+- **Dashboard** principal con métricas de GPU en tiempo real (uso, VRAM, temperatura, potencia, procesos).
+- Pestaña para **cambiar de modelo** `.gguf` fácilmente.
+- Pestaña de **diagnóstico GPU** con `nvidia-smi`, información PCIe y reinicio de módulos/servicio.
+- Configuración de arranque por modelo: CPU/GPU, capas en GPU, contexto, hilos, batch, MMAP, MLOCK, Flash Attention, Jinja, Special, etc.
+- Detección automática de GPUs Pascal para deshabilitar Flash Attention.
 - Espera a que el nuevo modelo responda en `/health` antes de darlo por cargado.
 - Lleva logs de `llama-server` en `logs/`.
 

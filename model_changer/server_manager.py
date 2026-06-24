@@ -151,6 +151,72 @@ class LlamaServerManager:
             "cpu_count_physical": psutil.cpu_count(logical=False),
         }
 
+    def get_gpu_metrics(self) -> Dict[str, Any]:
+        """Devuelve métricas numéricas de la GPU para el dashboard."""
+        metrics = {
+            "available": False,
+            "name": None,
+            "utilization_gpu": 0,
+            "utilization_mem": 0,
+            "vram_used_mb": 0,
+            "vram_total_mb": 0,
+            "temperature_c": 0,
+            "power_draw_w": 0.0,
+            "power_limit_w": 0.0,
+            "clock_mhz": 0,
+            "processes": [],
+        }
+        if not shutil.which("nvidia-smi"):
+            return metrics
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw,power.limit,clocks.current.sm",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True, text=True, check=False, timeout=5
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return metrics
+            parts = result.stdout.strip().splitlines()[0].split(",")
+            if len(parts) >= 9:
+                metrics["available"] = True
+                metrics["name"] = parts[0].strip()
+                metrics["utilization_gpu"] = int(parts[1].strip())
+                metrics["utilization_mem"] = int(parts[2].strip())
+                metrics["vram_used_mb"] = int(parts[3].strip())
+                metrics["vram_total_mb"] = int(parts[4].strip())
+                metrics["temperature_c"] = int(parts[5].strip())
+                metrics["power_draw_w"] = float(parts[6].strip())
+                metrics["power_limit_w"] = float(parts[7].strip())
+                metrics["clock_mhz"] = int(parts[8].strip())
+        except Exception as exc:
+            self.logger.warning("Error obteniendo métricas GPU: %s", exc)
+
+        # Procesos en la GPU
+        try:
+            proc_result = subprocess.run(
+                ["nvidia-smi", "pmon", "-s", "um", "-c", "1"],
+                capture_output=True, text=True, check=False, timeout=5
+            )
+            if proc_result.returncode == 0:
+                processes = []
+                for line in proc_result.stdout.strip().splitlines()[2:]:
+                    cols = line.split()
+                    if len(cols) >= 4:
+                        processes.append({
+                            "pid": cols[1],
+                            "name": cols[3] if len(cols) > 3 else "",
+                            "sm": cols[-2] if len(cols) >= 2 else "0",
+                            "mem": cols[-1] if len(cols) >= 1 else "0",
+                        })
+                metrics["processes"] = processes
+        except Exception as exc:
+            self.logger.warning("Error obteniendo procesos GPU: %s", exc)
+
+        return metrics
+
     def get_gpu_status_text(self) -> str:
         """Devuelve la salida textual de nvidia-smi."""
         if not shutil.which("nvidia-smi"):
