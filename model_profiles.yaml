@@ -1,20 +1,27 @@
 # Perfiles de arranque por modelo
-# Cada modelo puede tener su propio modo (cpu/gpu), capas en GPU,
-# tamaño de contexto, hilos y argumentos extra de llama-server.
-#
+# Cada modelo puede tener su propia configuración de arranque.
 # El perfil 'default' se aplica a cualquier modelo que no tenga entrada
 # propia en 'profiles'.
 
 default:
-  device: gpu          # cpu | gpu
-  n_gpu_layers: 999    # 0 fuerza CPU; 999 fuerza todas las capas en GPU
+  device: gpu          # cpu | gpu | auto
+  n_gpu_layers: 999    # 0 fuerza CPU pura; 999 fuerza todas las capas en GPU
   ctx_size: 8192
   threads: 8
+  batch_size: 512
+  port: 8080
+  host: 0.0.0.0
+  mmap: false
+  mlock: false
+  flash_attn: false
+  defrag_thold: 0.1
+  verbose: 2
+  parallel: 4
   extra_args: []
   # Ejemplo de extra_args:
   # extra_args:
-  #   - "--flash-attn"
-  #   - "--mlock"
+  #   - "--temp"
+  #   - "0.7"
 
 profiles:
   # Ejemplo para un modelo grande que no cabe completo en la GPU
@@ -23,6 +30,8 @@ profiles:
   #   n_gpu_layers: 60
   #   ctx_size: 4096
   #   threads: 8
+  #   batch_size: 512
+  #   flash_attn: false
+  #   mlock: true
   #   extra_args:
-  #     - "--flash-attn"
-  #     - "--mlock"
+  #     - "--no-mmap"

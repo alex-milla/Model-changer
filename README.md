@@ -138,6 +138,15 @@ default:
   n_gpu_layers: 999
   ctx_size: 8192
   threads: 8
+  batch_size: 512
+  port: 8080
+  host: 0.0.0.0
+  mmap: false
+  mlock: false
+  flash_attn: false
+  defrag_thold: 0.1
+  verbose: 2
+  parallel: 4
   extra_args: []
 
 profiles:
@@ -146,37 +155,55 @@ profiles:
     n_gpu_layers: 999
     ctx_size: 8192
     threads: 8
+    mlock: true
     extra_args:
-      - "--flash-attn"
+      - "--no-mmap"
 
   DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf:
     device: gpu
     n_gpu_layers: 999
     ctx_size: 4096
     threads: 8
+    mlock: true
     extra_args:
-      - "--flash-attn"
-      - "--mlock"
+      - "--no-mmap"
 ```
 
 ### Campos disponibles
 
 | Campo | Descripción |
 |-------|-------------|
-| `device` | `gpu` o `cpu`. En modo `cpu` se fuerza `-ngl 0`. |
+| `device` | `gpu`, `cpu` o `auto`. En modo `cpu` se fuerza `-ngl 0`. |
 | `n_gpu_layers` | Número de capas a cargar en la GPU. `999` fuerza todas. |
 | `ctx_size` | Tamaño del contexto (`-c`). |
 | `threads` | Número de hilos (`-t`). |
+| `batch_size` | Tamaño de batch (`-b`). |
+| `port` | Puerto HTTP del `llama-server`. |
+| `host` | Interfaz de red (`--host`). |
+| `mmap` | `true` para `--mmap`, `false` para `--no-mmap`. |
+| `mlock` | `true` para `--mlock`. |
+| `flash_attn` | `true` para `--flash-attn`. Se fuerza a `false` en GPUs Pascal. |
+| `defrag_thold` | Umbral de defragmentación KV cache (`--defrag-thold`). |
+| `verbose` | Nivel de verbose: 0 (nada), 1 (`-v`), 2 (`-vv`), 3 (`-vvv`). |
+| `parallel` | Slots paralelos (`--parallel`). |
 | `extra_args` | Lista de argumentos extra de `llama-server` (uno por línea). |
 
 ### Optimizaciones recomendadas para Tesla P40
 
-- `device: gpu` con `n_gpu_layers: 999` para cargar todo el modelo en la GPU.
-- `--flash-attn` (o `-fa`) para ahorrar VRAM en modelos grandes.
-- `--mlock` para evitar que el sistema mueva el modelo a swap.
-- `--no-mmap` si tienes suficiente RAM y quieres cargar todo en memoria.
+La Tesla P40 es una GPU Pascal (compute capability 6.1). **No soporta Flash Attention**. El panel detecta esto automáticamente y deshabilita la opción.
 
-También puedes editar los perfiles directamente desde el panel web pulsando **Configurar** en cada tarjeta de modelo.
+Configuración recomendada:
+
+- `device: gpu` con `n_gpu_layers: 999` para cargar todo el modelo en la GPU.
+- `ctx_size`: según VRAM disponible:
+  - VRAM < 8 GB: máximo 4096
+  - VRAM < 16 GB: máximo 8192
+  - VRAM >= 16 GB: hasta 16384
+- `--mlock` para evitar que el sistema mueva el modelo a swap.
+- `--no-mmap` para cargar el modelo completo en RAM antes de pasarlo a la GPU (recomendado si el bus PCIe es lento).
+- `--defrag-thold 0.1` para mantener la KV cache defragmentada.
+
+También puedes editar los perfiles directamente desde el panel web pulsando **Configurar** en cada tarjeta de modelo. El panel muestra el comando final que se ejecutará.
 
 ## Solución de problemas
 

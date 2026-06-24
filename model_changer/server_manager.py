@@ -1,8 +1,10 @@
-"""Gestión del proceso llama-server con perfiles por modelo."""
+"""Gestión del proceso llama-server con perfiles avanzados por modelo."""
 import os
+import re
 import time
 import logging
 import subprocess
+import shutil
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
@@ -68,7 +70,21 @@ class LlamaServerManager:
         merged.setdefault("n_gpu_layers", self.config.get("n_gpu_layers", 999))
         merged.setdefault("ctx_size", self.config.get("ctx_size", 8192))
         merged.setdefault("threads", self.config.get("threads", 8))
+        merged.setdefault("batch_size", 512)
+        merged.setdefault("port", self.config.get("llama_port", 8080))
+        merged.setdefault("host", self.config.get("llama_host", "0.0.0.0"))
+        merged.setdefault("mmap", False)
+        merged.setdefault("mlock", False)
+        merged.setdefault("flash_attn", False)
+        merged.setdefault("defrag_thold", 0.1)
+        merged.setdefault("verbose", 2)
+        merged.setdefault("parallel", 4)
         merged.setdefault("extra_args", [])
+
+        # Seguridad: forzar flash-attn off en GPUs Pascal (sm6x)
+        gpu = self.get_gpu_info()
+        if gpu.get("is_pascal") and merged.get("flash_attn"):
+            merged["flash_attn"] = False
 
         return merged
 
@@ -78,6 +94,60 @@ class LlamaServerManager:
             self.profiles["profiles"] = {}
         self.profiles["profiles"][model_name] = profile
         self._save_profiles()
+
+    def get_gpu_info(self) -> Dict[str, Any]:
+        """Obtiene información básica de la GPU NVIDIA si está disponible."""
+        info = {
+            "available": False,
+            "name": None,
+            "compute_cap": None,
+            "vram_mb": None,
+            "is_pascal": False,
+        }
+        if not shutil.which("nvidia-smi"):
+            return info
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, check=False, timeout=5
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return info
+            lines = result.stdout.strip().splitlines()
+            if not lines:
+                return info
+            parts = lines[0].split(",")
+            if len(parts) >= 2:
+                info["available"] = True
+                info["name"] = parts[0].strip()
+                info["vram_mb"] = int(parts[1].strip())
+
+            # Detectar capability (si nvidia-smi lo soporta)
+            cap_result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+                capture_output=True, text=True, check=False, timeout=5
+            )
+            if cap_result.returncode == 0 and cap_result.stdout.strip():
+                cap = cap_result.stdout.strip().splitlines()[0].strip()
+                info["compute_cap"] = cap
+                # Pascal es compute capability 6.x
+                info["is_pascal"] = cap.startswith("6.")
+            else:
+                # Fallback por nombre
+                name_lower = (info["name"] or "").lower()
+                info["is_pascal"] = any(x in name_lower for x in ["pascal", "p40", "p100", "gtx 10"])
+        except Exception as exc:
+            self.logger.warning("No se pudo obtener información de GPU: %s", exc)
+        return info
+
+    def get_system_info(self) -> Dict[str, Any]:
+        """Obtiene información básica del sistema."""
+        mem = psutil.virtual_memory()
+        return {
+            "total_ram_gb": round(mem.total / (1024 ** 3), 2),
+            "cpu_count": psutil.cpu_count(logical=True),
+            "cpu_count_physical": psutil.cpu_count(logical=False),
+        }
 
     @property
     def base_url(self) -> str:
@@ -120,13 +190,17 @@ class LlamaServerManager:
                 if any("llama-server" in part for part in cmdline):
                     # Intentar averiguar el modelo
                     model = None
+                    host = self.config.get("llama_host", "127.0.0.1")
+                    port = self.config.get("llama_port", 8080)
                     for i, arg in enumerate(cmdline):
                         if arg == "-m" and i + 1 < len(cmdline):
                             model = Path(cmdline[i + 1]).name
-                            break
+                        if arg == "--host" and i + 1 < len(cmdline):
+                            host = cmdline[i + 1]
+                        if arg == "--port" and i + 1 < len(cmdline):
+                            port = cmdline[i + 1]
                         if arg.startswith("--model") and "=" in arg:
                             model = Path(arg.split("=", 1)[1]).name
-                            break
                     try:
                         uptime = time.time() - proc.create_time()
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -135,7 +209,7 @@ class LlamaServerManager:
                         running=True,
                         model=model,
                         pid=proc.info["pid"],
-                        url=self.base_url,
+                        url=f"http://{host}:{port}",
                         uptime_seconds=uptime,
                     )
             except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -149,30 +223,56 @@ class LlamaServerManager:
             uptime_seconds=None,
         )
 
-    def _build_command(self, model_name: str) -> List[str]:
+    def build_command(self, model_name: str, profile: Optional[Dict[str, Any]] = None) -> List[str]:
+        """Construye el comando de llama-server para un modelo y perfil dados."""
         bin_path = Path(self.config["llama_server_bin"])
         models_dir = Path(self.config["models_dir"])
         model_path = models_dir / model_name
-        profile = self.get_profile(model_name)
+        if profile is None:
+            profile = self.get_profile(model_name)
 
         device = str(profile.get("device", "gpu")).lower()
         n_gpu_layers = int(profile.get("n_gpu_layers", 999))
         ctx_size = int(profile.get("ctx_size", 8192))
         threads = int(profile.get("threads", 8))
+        batch_size = int(profile.get("batch_size", 512))
+        host = str(profile.get("host", self.config.get("llama_host", "127.0.0.1")))
+        port = int(profile.get("port", self.config.get("llama_port", 8080)))
+        mmap = bool(profile.get("mmap", False))
+        mlock = bool(profile.get("mlock", False))
+        flash_attn = bool(profile.get("flash_attn", False))
+        defrag_thold = float(profile.get("defrag_thold", 0.1))
+        verbose = int(profile.get("verbose", 2))
+        parallel = int(profile.get("parallel", 4))
 
         cmd = [
             str(bin_path),
             "-m", str(model_path),
-            "--host", str(self.config.get("llama_host", "127.0.0.1")),
-            "--port", str(self.config.get("llama_port", 8080)),
+            "--host", host,
+            "--port", str(port),
             "-c", str(ctx_size),
             "-t", str(threads),
+            "-b", str(batch_size),
+            "--parallel", str(parallel),
         ]
 
         if device == "cpu":
             cmd.extend(["-ngl", "0"])
         else:
             cmd.extend(["-ngl", str(n_gpu_layers)])
+
+        if not mmap:
+            cmd.append("--no-mmap")
+        if mlock:
+            cmd.append("--mlock")
+        if flash_attn:
+            cmd.append("--flash-attn")
+
+        cmd.extend(["--defrag-thold", str(defrag_thold)])
+
+        # Verbosidad: -v, -vv, -vvv
+        if verbose > 0:
+            cmd.append("-" + "v" * min(verbose, 3))
 
         # Argumentos extra opcionales del perfil
         extra = profile.get("extra_args", [])
@@ -181,6 +281,10 @@ class LlamaServerManager:
         cmd.extend(extra)
 
         return cmd
+
+    def _build_command(self, model_name: str) -> List[str]:
+        """Compatibilidad con llamadas antiguas."""
+        return self.build_command(model_name)
 
     def start(self, model_name: str, timeout: int = 60) -> ServerStatus:
         if not model_name.endswith(".gguf"):
@@ -197,7 +301,12 @@ class LlamaServerManager:
         # Detener servidor actual si está corriendo
         self.stop()
 
-        cmd = self._build_command(model_name)
+        profile = self.get_profile(model_name)
+        cmd = self.build_command(model_name, profile)
+        port = int(profile.get("port", self.config.get("llama_port", 8080)))
+        host = str(profile.get("host", self.config.get("llama_host", "127.0.0.1")))
+        target_url = f"http://{host}:{port}"
+
         self.logger.info("Iniciando llama-server: %s", " ".join(cmd))
 
         # Preparar logs
@@ -221,7 +330,7 @@ class LlamaServerManager:
             )
         except Exception as exc:
             return ServerStatus(
-                running=False, model=None, pid=None, url=self.base_url,
+                running=False, model=None, pid=None, url=target_url,
                 uptime_seconds=None, error=f"Error al iniciar llama-server: {exc}"
             )
 
@@ -229,7 +338,7 @@ class LlamaServerManager:
         self.start_time = time.time()
 
         # Esperar a que responda el healthcheck
-        health_url = f"{self.base_url}/health"
+        health_url = f"{target_url}/health"
         start_wait = time.time()
         last_error = None
         while time.time() - start_wait < timeout:
@@ -248,7 +357,7 @@ class LlamaServerManager:
         if not status.running:
             err = last_error or "El proceso terminó antes de tiempo"
             return ServerStatus(
-                running=False, model=None, pid=None, url=self.base_url,
+                running=False, model=None, pid=None, url=target_url,
                 uptime_seconds=None, error=f"No se pudo arrancar el modelo: {err}"
             )
         return status
@@ -271,7 +380,7 @@ class LlamaServerManager:
                 self.current_model = None
                 self.start_time = None
 
-        # También detener cualquier llama-server externo que use el puerto configurado
+        # También detener cualquier llama-server externo
         for proc in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
                 cmdline = proc.info.get("cmdline") or []

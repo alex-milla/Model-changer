@@ -54,12 +54,53 @@ def _parse_extra_args(value: str) -> List[str]:
     """Convierte una cadena de argumentos extra en una lista."""
     if not value or not value.strip():
         return []
-    # Soporta tanto líneas separadas como espacios (estilo shell)
     lines = [line.strip() for line in value.splitlines() if line.strip()]
     result = []
     for line in lines:
         result.extend(shlex.split(line))
     return result
+
+
+def _to_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).lower() in ("true", "1", "on", "yes")
+
+
+def _profile_from_form(
+    device: str,
+    n_gpu_layers: int,
+    ctx_size: int,
+    threads: int,
+    batch_size: int,
+    port: int,
+    host: str,
+    defrag_thold: float,
+    verbose: int,
+    parallel: int,
+    extra_args: str,
+    mmap: str = Form(""),
+    mlock: str = Form(""),
+    flash_attn: str = Form(""),
+) -> dict:
+    return {
+        "device": device.lower(),
+        "n_gpu_layers": n_gpu_layers,
+        "ctx_size": ctx_size,
+        "threads": threads,
+        "batch_size": batch_size,
+        "port": port,
+        "host": host,
+        "mmap": _to_bool(mmap),
+        "mlock": _to_bool(mlock),
+        "flash_attn": _to_bool(flash_attn),
+        "defrag_thold": defrag_thold,
+        "verbose": verbose,
+        "parallel": parallel,
+        "extra_args": _parse_extra_args(extra_args),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -87,29 +128,59 @@ async def api_status():
     return status_to_dict(manager.status())
 
 
+@app.get("/api/gpu-info")
+async def api_gpu_info():
+    return manager.get_gpu_info()
+
+
+@app.get("/api/system-info")
+async def api_system_info():
+    return manager.get_system_info()
+
+
 @app.get("/api/profile/{model_name}")
 async def api_get_profile(model_name: str):
     return {"model": model_name, "profile": manager.get_profile(model_name)}
 
 
 @app.post("/api/profile/{model_name}")
-async def api_set_profile(
+async def api_set_profile(model_name: str, profile: dict = Form(...)):
+    # FastAPI no puede recibir un dict directamente de un formulario HTML;
+    # los campos se reciben individualmente en el endpoint de fragmento.
+    raise HTTPException(status_code=400, detail="Usa /fragments/profile-form/{model_name} con POST")
+
+
+@app.post("/api/profile-save/{model_name}")
+async def api_save_profile(
     model_name: str,
     device: str = Form("gpu"),
     n_gpu_layers: int = Form(999),
     ctx_size: int = Form(8192),
     threads: int = Form(8),
+    batch_size: int = Form(512),
+    port: int = Form(8080),
+    host: str = Form("0.0.0.0"),
+    defrag_thold: float = Form(0.1),
+    verbose: int = Form(2),
+    parallel: int = Form(4),
     extra_args: str = Form(""),
+    mmap: str = Form(""),
+    mlock: str = Form(""),
+    flash_attn: str = Form(""),
 ):
-    profile = {
-        "device": device.lower(),
-        "n_gpu_layers": n_gpu_layers,
-        "ctx_size": ctx_size,
-        "threads": threads,
-        "extra_args": _parse_extra_args(extra_args),
-    }
+    profile = _profile_from_form(
+        device, n_gpu_layers, ctx_size, threads, batch_size, port, host,
+        defrag_thold, verbose, parallel, extra_args, mmap, mlock, flash_attn
+    )
     manager.set_profile(model_name, profile)
     return {"ok": True, "model": model_name, "profile": profile}
+
+
+@app.get("/api/command/{model_name}")
+async def api_command(model_name: str):
+    profile = manager.get_profile(model_name)
+    cmd = manager.build_command(model_name, profile)
+    return {"model": model_name, "command": cmd, "command_str": shlex.join(cmd)}
 
 
 @app.post("/api/switch")
@@ -153,7 +224,9 @@ async def fragment_models():
 async def fragment_profile_form(model_name: str):
     profile = manager.get_profile(model_name)
     extra = "\n".join(profile.get("extra_args", []))
-    return HTMLResponse(_render_profile_form(model_name, profile, extra))
+    gpu = manager.get_gpu_info()
+    system = manager.get_system_info()
+    return HTMLResponse(_render_profile_form(model_name, profile, extra, gpu, system))
 
 
 def _render_status(status):
@@ -200,6 +273,7 @@ def _render_models_fragment(models):
         device = profile.get("device", "gpu").upper()
         ngl = profile.get("n_gpu_layers", 999)
         ctx = profile.get("ctx_size", 8192)
+        port = profile.get("port", 8080)
         cards.append(f"""
         <div class="model-card bg-gray-800 border border-gray-700 rounded-xl p-4 hover:border-green-500 transition" id="model-card-{m}">
             <div class="flex items-start justify-between mb-3">
@@ -209,6 +283,7 @@ def _render_models_fragment(models):
                         <span class="px-2 py-0.5 bg-gray-700 rounded">{device}</span>
                         <span class="px-2 py-0.5 bg-gray-700 rounded">NGL: {ngl}</span>
                         <span class="px-2 py-0.5 bg-gray-700 rounded">CTX: {ctx}</span>
+                        <span class="px-2 py-0.5 bg-gray-700 rounded">PORT: {port}</span>
                     </div>
                 </div>
             </div>
@@ -232,32 +307,73 @@ def _render_models_fragment(models):
     return "\n".join(cards)
 
 
-def _render_profile_form(model_name: str, profile: dict, extra: str):
+def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, system: dict):
     device = profile.get("device", "gpu")
     gpu_selected = "selected" if device == "gpu" else ""
     cpu_selected = "selected" if device == "cpu" else ""
+    auto_selected = "selected" if device == "auto" else ""
+
+    host = profile.get("host", "0.0.0.0")
+    host_local = "selected" if host == "127.0.0.1" else ""
+    host_all = "selected" if host == "0.0.0.0" else ""
+
+    mmap_checked = "checked" if profile.get("mmap", False) else ""
+    mlock_checked = "checked" if profile.get("mlock", False) else ""
+    flash_checked = "checked" if profile.get("flash_attn", False) else ""
+    flash_disabled = "disabled" if gpu.get("is_pascal") else ""
+    flash_tooltip = ""
+    if gpu.get("is_pascal"):
+        flash_tooltip = '<p class="text-xs text-yellow-400 mt-1">⚠ Flash Attention no es compatible con Pascal. Forzado a Off.</p>'
+
+    ram_gb = system.get("total_ram_gb", 0)
+    vram_mb = gpu.get("vram_mb") or 0
+    vram_gb = round(vram_mb / 1024, 1) if vram_mb else "?"
+
+    # Sugerencia de contexto según VRAM
+    if vram_mb and vram_mb < 8192:
+        ctx_suggest = 4096
+    elif vram_mb and vram_mb < 16384:
+        ctx_suggest = 8192
+    else:
+        ctx_suggest = 16384
+
     return f"""
-    <form hx-post="/api/profile/{model_name}" hx-target="#profile-result" hx-swap="innerHTML"
+    <form hx-post="/api/profile-save/{model_name}" hx-target="#profile-result" hx-swap="innerHTML"
           onsubmit="setTimeout(() => htmx.trigger('#models-list','load'), 300)">
-        <h3 class="text-lg font-semibold text-green-300 mb-4 break-all">{model_name}</h3>
-        <div class="space-y-4">
-            <div>
-                <label class="block text-sm text-gray-400 mb-1">Dispositivo</label>
-                <select name="device" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
-                    <option value="gpu" {gpu_selected}>GPU (CUDA)</option>
-                    <option value="cpu" {cpu_selected}>CPU</option>
-                </select>
+        <h3 class="text-lg font-semibold text-green-300 mb-1 break-all">{model_name}</h3>
+        <p class="text-xs text-gray-400 mb-4">VRAM detectada: {vram_gb} GB · RAM total: {ram_gb} GB</p>
+
+        <div class="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Dispositivo</label>
+                    <select name="device" id="pf-device-{model_name}" onchange="updateWarnings('{model_name}')"
+                            class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                        <option value="gpu" {gpu_selected}>GPU (CUDA)</option>
+                        <option value="cpu" {cpu_selected}>CPU</option>
+                        <option value="auto" {auto_selected}>Auto</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Host</label>
+                    <select name="host" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                        <option value="0.0.0.0" {host_all}>0.0.0.0 (todas)</option>
+                        <option value="127.0.0.1" {host_local}>127.0.0.1 (local)</option>
+                    </select>
+                </div>
             </div>
+
             <div class="grid grid-cols-3 gap-3">
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Capas GPU</label>
-                    <input type="number" name="n_gpu_layers" value="{profile.get('n_gpu_layers', 999)}"
+                    <input type="number" name="n_gpu_layers" id="pf-ngl-{model_name}" value="{profile.get('n_gpu_layers', 999)}"
                            class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Contexto</label>
                     <input type="number" name="ctx_size" value="{profile.get('ctx_size', 8192)}"
-                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white"
+                           title="Sugerencia según VRAM: {ctx_suggest}">
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Hilos</label>
@@ -265,13 +381,74 @@ def _render_profile_form(model_name: str, profile: dict, extra: str):
                            class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
                 </div>
             </div>
+
+            <div class="grid grid-cols-3 gap-3">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Batch</label>
+                    <input type="number" name="batch_size" value="{profile.get('batch_size', 512)}"
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Puerto</label>
+                    <input type="number" name="port" value="{profile.get('port', 8080)}"
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Paralelismo</label>
+                    <input type="number" name="parallel" value="{profile.get('parallel', 4)}"
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Defrag thold</label>
+                    <input type="number" step="0.05" name="defrag_thold" value="{profile.get('defrag_thold', 0.1)}"
+                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Verbose</label>
+                    <select name="verbose" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white">
+                        <option value="0" {"selected" if profile.get('verbose', 2) == 0 else ""}>0 - errores</option>
+                        <option value="1" {"selected" if profile.get('verbose', 2) == 1 else ""}>1 - warnings</option>
+                        <option value="2" {"selected" if profile.get('verbose', 2) == 2 else ""}>2 - info</option>
+                        <option value="3" {"selected" if profile.get('verbose', 2) == 3 else ""}>3 - debug</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3">
+                <label class="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded p-2 cursor-pointer">
+                    <input type="checkbox" name="mmap" {mmap_checked} class="accent-green-500">
+                    <span class="text-sm">MMAP</span>
+                </label>
+                <label class="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded p-2 cursor-pointer">
+                    <input type="checkbox" name="mlock" {mlock_checked} class="accent-green-500">
+                    <span class="text-sm">MLOCK</span>
+                </label>
+                <label class="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded p-2 cursor-pointer" title="{ 'No compatible con Pascal' if gpu.get('is_pascal') else 'Flash Attention' }">
+                    <input type="checkbox" name="flash_attn" {flash_checked} {flash_disabled} class="accent-green-500">
+                    <span class="text-sm">Flash Attn</span>
+                </label>
+            </div>
+            {flash_tooltip}
+            <p id="pf-warn-{model_name}" class="text-xs text-yellow-400 hidden"></p>
+
             <div>
                 <label class="block text-sm text-gray-400 mb-1">Argumentos extra (uno por línea)</label>
                 <textarea name="extra_args" rows="3"
                           class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-white font-mono text-sm"
-                          placeholder="--flash-attn&#10;--mlock">{extra}</textarea>
+                          placeholder="--temp 0.7&#10;--top-p 0.9">{extra}</textarea>
+            </div>
+
+            <div class="bg-gray-900 border border-gray-700 rounded p-3">
+                <label class="block text-sm text-gray-400 mb-1">Comando generado</label>
+                <div hx-get="/api/command/{model_name}" hx-trigger="load" class="text-xs font-mono text-green-300 break-all">
+                    Cargando...
+                </div>
             </div>
         </div>
+
         <div id="profile-result" class="mt-3"></div>
         <div class="flex gap-2 mt-4">
             <button type="button"
@@ -285,4 +462,19 @@ def _render_profile_form(model_name: str, profile: dict, extra: str):
             </button>
         </div>
     </form>
+
+    <script>
+        function updateWarnings(model) {{
+            const device = document.getElementById('pf-device-' + model).value;
+            const ngl = document.getElementById('pf-ngl-' + model).value;
+            const warn = document.getElementById('pf-warn-' + model);
+            let msg = '';
+            if (device === 'gpu' && parseInt(ngl) === 0) {{
+                msg = '⚠ ngl=0 fuerza CPU pura aunque el dispositivo sea GPU.';
+            }}
+            warn.textContent = msg;
+            warn.classList.toggle('hidden', !msg);
+        }}
+        updateWarnings('{model_name}');
+    </script>
     """
