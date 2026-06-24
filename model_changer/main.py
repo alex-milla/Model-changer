@@ -173,13 +173,7 @@ async def api_save_profile(
         defrag_thold, verbose, parallel, extra_args, mmap, mlock, flash_attn
     )
     manager.set_profile(model_name, profile)
-    return HTMLResponse(f"""
-        <div class="text-sm text-green-400 mb-2">✅ Guardado correctamente.</div>
-        <script>
-            document.getElementById('profile-modal').classList.add('hidden');
-            htmx.trigger('#models-list', 'load');
-        </script>
-    """)
+    return HTMLResponse(f'<div class="text-sm text-green-400 mb-2">✅ Guardado correctamente.</div>')
 
 
 @app.get("/api/command/{model_name}")
@@ -344,7 +338,8 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
         ctx_suggest = 16384
 
     return f"""
-    <form hx-post="/api/profile-save/{model_name}" hx-target="#profile-result" hx-swap="innerHTML">
+    <form hx-post="/api/profile-save/{model_name}" hx-target="#profile-result" hx-swap="innerHTML"
+          hx-on="htmx:afterRequest: if(event.detail.successful && event.detail.elt === this) {{ document.getElementById('profile-modal').classList.add('hidden'); htmx.trigger('#models-list', 'load'); }}">
         <h3 class="text-lg font-semibold text-green-300 mb-1 break-all">{model_name}</h3>
         <p class="text-xs text-gray-400 mb-4">VRAM detectada: {vram_gb} GB · RAM total: {ram_gb} GB</p>
 
