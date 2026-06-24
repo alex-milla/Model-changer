@@ -83,6 +83,8 @@ def _profile_from_form(
     mmap: str = Form(""),
     mlock: str = Form(""),
     flash_attn: str = Form(""),
+    jinja: str = Form(""),
+    special: str = Form(""),
 ) -> dict:
     return {
         "device": device.lower(),
@@ -95,6 +97,8 @@ def _profile_from_form(
         "mmap": _to_bool(mmap),
         "mlock": _to_bool(mlock),
         "flash_attn": _to_bool(flash_attn),
+        "jinja": _to_bool(jinja),
+        "special": _to_bool(special),
         "verbose": verbose,
         "parallel": parallel,
         "extra_args": _parse_extra_args(extra_args),
@@ -165,10 +169,12 @@ async def api_save_profile(
     mmap: str = Form(""),
     mlock: str = Form(""),
     flash_attn: str = Form(""),
+    jinja: str = Form(""),
+    special: str = Form(""),
 ):
     profile = _profile_from_form(
         device, n_gpu_layers, ctx_size, threads, batch_size, port, host,
-        verbose, parallel, extra_args, mmap, mlock, flash_attn
+        verbose, parallel, extra_args, mmap, mlock, flash_attn, jinja, special
     )
     manager.set_profile(model_name, profile)
     return HTMLResponse(f'<div class="text-sm text-green-400 mb-2">✅ Guardado correctamente.</div>')
@@ -318,6 +324,8 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
     mmap_checked = "checked" if profile.get("mmap", False) else ""
     mlock_checked = "checked" if profile.get("mlock", False) else ""
     flash_checked = "checked" if profile.get("flash_attn", False) else ""
+    jinja_checked = "checked" if profile.get("jinja", False) else ""
+    special_checked = "checked" if profile.get("special", False) else ""
     flash_disabled = "disabled" if gpu.get("is_pascal") else ""
     flash_tooltip = ""
     if gpu.get("is_pascal"):
@@ -420,6 +428,16 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
                 <label class="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded p-2 cursor-pointer" title="{ 'No compatible con Pascal' if gpu.get('is_pascal') else 'Flash Attention' }">
                     <input type="checkbox" name="flash_attn" {flash_checked} {flash_disabled} class="accent-green-500">
                     <span class="text-sm">Flash Attn</span>
+                </label>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <label class="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded p-2 cursor-pointer" title="Plantillas de chat Jinja (--jinja)">
+                    <input type="checkbox" name="jinja" {jinja_checked} class="accent-green-500">
+                    <span class="text-sm">Jinja</span>
+                </label>
+                <label class="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded p-2 cursor-pointer" title="Tokens especiales (--special)">
+                    <input type="checkbox" name="special" {special_checked} class="accent-green-500">
+                    <span class="text-sm">Special</span>
                 </label>
             </div>
             {flash_tooltip}

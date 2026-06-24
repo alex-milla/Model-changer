@@ -76,6 +76,8 @@ class LlamaServerManager:
         merged.setdefault("mmap", False)
         merged.setdefault("mlock", False)
         merged.setdefault("flash_attn", False)
+        merged.setdefault("jinja", False)
+        merged.setdefault("special", False)
         merged.setdefault("verbose", 2)
         merged.setdefault("parallel", 4)
         merged.setdefault("extra_args", [])
@@ -240,6 +242,8 @@ class LlamaServerManager:
         mmap = bool(profile.get("mmap", False))
         mlock = bool(profile.get("mlock", False))
         flash_attn = bool(profile.get("flash_attn", False))
+        jinja = bool(profile.get("jinja", False))
+        special = bool(profile.get("special", False))
         verbose = int(profile.get("verbose", 2))
         parallel = int(profile.get("parallel", 4))
 
@@ -265,7 +269,10 @@ class LlamaServerManager:
             cmd.append("--mlock")
         if flash_attn:
             cmd.append("--flash-attn")
-
+        if jinja:
+            cmd.append("--jinja")
+        if special:
+            cmd.append("--special")
 
         # Verbosidad: -v o --verbose (llama-server no acepta -vv)
         if verbose > 0:
