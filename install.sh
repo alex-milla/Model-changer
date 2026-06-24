@@ -11,8 +11,13 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "==> Instalando Model Changer en $PROJECT_DIR"
-mkdir -p "$PROJECT_DIR"
-cp -r . "$PROJECT_DIR"
+
+# Si no estamos ya en el directorio del proyecto, copiamos los archivos
+if [ "$(pwd)" != "$PROJECT_DIR" ]; then
+    mkdir -p "$PROJECT_DIR"
+    cp -r . "$PROJECT_DIR"
+fi
+
 cd "$PROJECT_DIR"
 
 echo "==> Instalando dependencias del sistema"
@@ -26,7 +31,8 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 echo "==> Preparando directorios"
-mkdir -p logs
+# Crear logs con el usuario que ejecutará el servicio
+sudo -u "$SERVICE_USER" mkdir -p logs
 
 echo "==> Instalando servicio systemd"
 # Ajustar el usuario del servicio al usuario real (tú)
