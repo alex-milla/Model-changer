@@ -28,16 +28,27 @@ class LlamaServerManager:
     def __init__(self, config_path: str = "config.yaml"):
         self.logger = logging.getLogger("model_changer")
         self.config = self._load_config(config_path)
-        self.profiles_path = Path(self.config.get("profiles_path", "model_profiles.yaml"))
+
+        # Resolver rutas relativas respecto al directorio del config.yaml
+        # para evitar que dependan del directorio de trabajo del proceso.
+        config_dir = Path(config_path).resolve().parent
+
+        profiles_path = Path(self.config.get("profiles_path", "model_profiles.yaml"))
+        if not profiles_path.is_absolute():
+            profiles_path = config_dir / profiles_path
+        self.profiles_path = profiles_path.resolve()
         self.profiles = self._load_profiles(self.profiles_path)
+
         self.process: Optional[subprocess.Popen] = None
         self.current_model: Optional[str] = None
         self.start_time: Optional[float] = None
 
         # Asegurar directorio de logs
         log_dir = Path(self.config.get("log_dir", "./logs"))
-        log_dir.mkdir(parents=True, exist_ok=True)
-        self.log_dir = log_dir
+        if not log_dir.is_absolute():
+            log_dir = config_dir / log_dir
+        self.log_dir = log_dir.resolve()
+        self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_config(self, path: str) -> Dict[str, Any]:
         with open(path, "r", encoding="utf-8") as f:
@@ -55,8 +66,14 @@ class LlamaServerManager:
         return data
 
     def _save_profiles(self) -> None:
-        with open(self.profiles_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(self.profiles, f, sort_keys=False, allow_unicode=True)
+        try:
+            self.profiles_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.profiles_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(self.profiles, f, sort_keys=False, allow_unicode=True)
+            self.logger.info("Perfiles guardados en %s", self.profiles_path)
+        except Exception as exc:
+            self.logger.error("No se pudieron guardar los perfiles en %s: %s", self.profiles_path, exc)
+            raise
 
     def get_profile(self, model_name: str) -> Dict[str, Any]:
         """Devuelve el perfil de un modelo mezclado con los valores por defecto."""
@@ -95,6 +112,7 @@ class LlamaServerManager:
         if "profiles" not in self.profiles:
             self.profiles["profiles"] = {}
         self.profiles["profiles"][model_name] = profile
+        self.logger.info("Guardando perfil para '%s'", model_name)
         self._save_profiles()
 
     def get_gpu_info(self) -> Dict[str, Any]:

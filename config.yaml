@@ -18,8 +18,10 @@ threads: 8
 manager_host: 0.0.0.0
 manager_port: 8081
 
-# Archivo de perfiles de arranque por modelo
+# Archivo de perfiles de arranque por modelo.
+# Las rutas relativas se resuelven respecto al directorio donde esté config.yaml.
 profiles_path: ./model_profiles.yaml
 
-# Directorio para logs del gestor
+# Directorio para logs del gestor.
+# Las rutas relativas se resuelven respecto al directorio donde esté config.yaml.
 log_dir: ./logs
