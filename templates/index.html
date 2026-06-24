@@ -30,6 +30,16 @@
             <div class="animate-pulse text-gray-400">Cargando estado...</div>
         </section>
 
+        <!-- Diagnóstico GPU -->
+        <section class="bg-gray-800 rounded-xl p-6 mb-6 shadow-lg">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold">🩺 Diagnóstico GPU</h2>
+            </div>
+            <div id="diagnostics-panel" hx-get="/fragments/diagnostics" hx-trigger="load" hx-swap="innerHTML">
+                <div class="animate-pulse text-gray-400">Cargando diagnóstico...</div>
+            </div>
+        </section>
+
         <!-- Lista de modelos -->
         <section>
             <div class="flex items-center justify-between mb-4">

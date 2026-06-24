@@ -151,6 +151,72 @@ class LlamaServerManager:
             "cpu_count_physical": psutil.cpu_count(logical=False),
         }
 
+    def get_gpu_status_text(self) -> str:
+        """Devuelve la salida textual de nvidia-smi."""
+        if not shutil.which("nvidia-smi"):
+            return "nvidia-smi no encontrado."
+        try:
+            result = subprocess.run(
+                ["nvidia-smi"],
+                capture_output=True, text=True, check=False, timeout=10
+            )
+            return result.stdout or result.stderr or "nvidia-smi no devolvió salida."
+        except Exception as exc:
+            return f"Error al ejecutar nvidia-smi: {exc}"
+
+    def get_pcie_status_text(self) -> str:
+        """Devuelve información PCIe de la GPU NVIDIA."""
+        if not shutil.which("lspci"):
+            return "lspci no encontrado."
+        try:
+            result = subprocess.run(
+                ["lspci", "-vv", "-d", "10de:"],
+                capture_output=True, text=True, check=False, timeout=10
+            )
+            output = result.stdout or result.stderr or "lspci no devolvió salida."
+            # Filtrar líneas relevantes (nombre, link capability, link status)
+            lines = []
+            for line in output.splitlines():
+                lower = line.lower()
+                if any(k in lower for k in ["nvidia", "tesla", "geforce", "vga", "3d", "link capability", "link status", "ltssm"]):
+                    lines.append(line)
+            return "\n".join(lines) if lines else output[:2000]
+        except Exception as exc:
+            return f"Error al ejecutar lspci: {exc}"
+
+    def reset_gpu_modules(self) -> Dict[str, Any]:
+        """Intenta reiniciar los módulos de NVIDIA. Requiere privilegios de root."""
+        if not shutil.which("sudo"):
+            return {"ok": False, "error": "sudo no disponible"}
+        try:
+            # Detener cualquier llama-server para liberar la GPU
+            self.stop()
+            # Reiniciar módulos
+            result = subprocess.run(
+                ["sudo", "bash", "-c", "rmmod nvidia_uvm nvidia && modprobe nvidia_uvm nvidia"],
+                capture_output=True, text=True, check=False, timeout=60
+            )
+            if result.returncode == 0:
+                return {"ok": True, "message": "Módulos NVIDIA reiniciados correctamente."}
+            return {"ok": False, "error": result.stderr or result.stdout or "Error desconocido"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def restart_service(self) -> Dict[str, Any]:
+        """Intenta reiniciar el servicio model-changer. Requiere privilegios de root."""
+        if not shutil.which("sudo"):
+            return {"ok": False, "error": "sudo no disponible"}
+        try:
+            result = subprocess.run(
+                ["sudo", "systemctl", "restart", "model-changer"],
+                capture_output=True, text=True, check=False, timeout=60
+            )
+            if result.returncode == 0:
+                return {"ok": True, "message": "Servicio model-changer reiniciado."}
+            return {"ok": False, "error": result.stderr or result.stdout or "Error desconocido"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     @property
     def base_url(self) -> str:
         host = self.config.get("llama_host", "127.0.0.1")

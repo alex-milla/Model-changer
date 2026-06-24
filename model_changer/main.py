@@ -142,6 +142,24 @@ async def api_system_info():
     return manager.get_system_info()
 
 
+@app.get("/api/gpu-status")
+async def api_gpu_status():
+    return {
+        "nvidia_smi": manager.get_gpu_status_text(),
+        "pcie": manager.get_pcie_status_text(),
+    }
+
+
+@app.post("/api/gpu-reset")
+async def api_gpu_reset():
+    return manager.reset_gpu_modules()
+
+
+@app.post("/api/service-restart")
+async def api_service_restart():
+    return manager.restart_service()
+
+
 @app.get("/api/profile/{model_name}")
 async def api_get_profile(model_name: str):
     return {"model": model_name, "profile": manager.get_profile(model_name)}
@@ -234,6 +252,11 @@ async def fragment_profile_form(model_name: str):
     gpu = manager.get_gpu_info()
     system = manager.get_system_info()
     return HTMLResponse(_render_profile_form(model_name, profile, extra, gpu, system))
+
+
+@app.get("/fragments/diagnostics", response_class=HTMLResponse)
+async def fragment_diagnostics():
+    return HTMLResponse(_render_diagnostics())
 
 
 def _render_status(status):
@@ -497,4 +520,48 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
         }}
         updateWarnings('{model_name}');
     </script>
+    """
+
+
+def _render_diagnostics():
+    gpu = manager.get_gpu_info()
+    nvidia_smi = manager.get_gpu_status_text()
+    pcie = manager.get_pcie_status_text()
+    return f"""
+    <div class="space-y-4">
+        <div class="flex flex-wrap gap-2">
+            <button hx-get="/fragments/diagnostics" hx-target="#diagnostics-panel" hx-swap="innerHTML"
+                    class="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded transition">
+                🔄 Refrescar
+            </button>
+            <button hx-post="/api/gpu-reset" hx-target="#diagnostics-result" hx-swap="innerHTML"
+                    class="px-3 py-1 text-sm bg-yellow-700 hover:bg-yellow-600 rounded transition"
+                    onclick="return confirm('¿Reiniciar módulos NVIDIA? Se detendrá cualquier modelo cargado.')">
+                ⚡ Reiniciar módulos NVIDIA
+            </button>
+            <button hx-post="/api/service-restart" hx-target="#diagnostics-result" hx-swap="innerHTML"
+                    class="px-3 py-1 text-sm bg-blue-700 hover:bg-blue-600 rounded transition"
+                    onclick="return confirm('¿Reiniciar el servicio Model Changer?')">
+                🔄 Reiniciar servicio
+            </button>
+        </div>
+
+        <div id="diagnostics-result" class="text-sm"></div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="bg-gray-900 border border-gray-700 rounded p-3">
+                <h4 class="text-sm font-semibold text-green-300 mb-2">nvidia-smi</h4>
+                <pre class="text-xs font-mono text-gray-300 overflow-x-auto whitespace-pre-wrap">{nvidia_smi}</pre>
+            </div>
+            <div class="bg-gray-900 border border-gray-700 rounded p-3">
+                <h4 class="text-sm font-semibold text-green-300 mb-2">PCIe (GPU NVIDIA)</h4>
+                <pre class="text-xs font-mono text-gray-300 overflow-x-auto whitespace-pre-wrap">{pcie}</pre>
+            </div>
+        </div>
+
+        <div class="text-xs text-gray-400">
+            <p>GPU detectada: {gpu.get('name') or 'No detectada'}</p>
+            <p>VRAM: {gpu.get('vram_mb') or '?'} MB · Pascal: {'Sí' if gpu.get('is_pascal') else 'No'}</p>
+        </div>
+    </div>
     """

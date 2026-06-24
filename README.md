@@ -243,6 +243,25 @@ sudo chown -R $USER:$USER /mnt/models
 
 Y actualiza `User=` y `Group=` en `/etc/systemd/system/model-changer.service` si es necesario.
 
+### Diagnóstico GPU desde el panel
+
+El panel incluye una sección **Diagnóstico GPU** que muestra:
+
+- Salida de `nvidia-smi`.
+- Información PCIe de la GPU.
+- Botón para refrescar el estado.
+- Botón para **reiniciar los módulos NVIDIA** (`nvidia_uvm`, `nvidia`).
+- Botón para **reiniciar el servicio** Model Changer.
+
+Los botones de reinicio requieren permisos `sudo`. Si el servicio no puede ejecutarlos, configura `sudoers` para que el usuario del servicio pueda ejecutar:
+
+```bash
+sudo /sbin/modprobe nvidia_uvm nvidia
+sudo /usr/bin/systemctl restart model-changer
+```
+
+sin contraseña.
+
 ### Seguridad en red
 
 Por defecto el panel escucha en `0.0.0.0`. Para protegerlo en una red compartida, ponlo detrás de **Nginx + autenticación básica** o un **túnel VPN/SSH**. No lo expongas directamente a Internet sin protección.
