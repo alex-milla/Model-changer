@@ -338,8 +338,7 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
         ctx_suggest = 16384
 
     return f"""
-    <form hx-post="/api/profile-save/{model_name}" hx-target="#profile-result" hx-swap="innerHTML"
-          hx-on="htmx:afterRequest: if(event.detail.successful && event.detail.elt === this) {{ document.getElementById('profile-modal').classList.add('hidden'); htmx.trigger('#models-list', 'load'); }}">
+    <form hx-post="/api/profile-save/{model_name}" hx-target="#profile-result" hx-swap="innerHTML">
         <h3 class="text-lg font-semibold text-green-300 mb-1 break-all">{model_name}</h3>
         <p class="text-xs text-gray-400 mb-4">VRAM detectada: {vram_gb} GB · RAM total: {ram_gb} GB</p>
 
@@ -457,6 +456,7 @@ def _render_profile_form(model_name: str, profile: dict, extra: str, gpu: dict, 
                 Cancelar
             </button>
             <button type="submit"
+                    onclick="setTimeout(function() {{ document.getElementById('profile-modal').classList.add('hidden'); htmx.trigger('#models-list', 'load'); }}, 300);"
                     class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition">
                 💾 Guardar
             </button>
