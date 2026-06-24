@@ -1,0 +1,22 @@
+# Configuración del gestor de modelos Llama.cpp
+# Ajusta las rutas a tu equipo Ubuntu antes de arrancar.
+
+# Binario llama-server compilado con soporte CUDA
+llama_server_bin: /opt/llama.cpp/build/bin/llama-server
+
+# Carpeta donde guardas los modelos .gguf
+models_dir: /mnt/models
+
+# Argumentos que se pasan siempre a llama-server
+llama_host: 0.0.0.0
+llama_port: 8080
+ctx_size: 8192
+n_gpu_layers: 999
+threads: 8
+
+# Puerto y host del panel web de cambio de modelos
+manager_host: 0.0.0.0
+manager_port: 8081
+
+# Directorio para logs del gestor
+log_dir: ./logs

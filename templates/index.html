@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Changer - Llama.cpp</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <style>
+        .model-card.active { border-color: #22c55e; background-color: #052e16; }
+        .htmx-indicator { display: none; }
+        .htmx-request .htmx-indicator { display: inline; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div class="max-w-5xl mx-auto p-6">
+        <header class="mb-8 flex items-center justify-between">
+            <div>
+                <h1 class="text-3xl font-bold text-green-400">🦙 Model Changer</h1>
+                <p class="text-gray-400 mt-1">Cambia el modelo cargado en Llama.cpp server desde el navegador.</p>
+            </div>
+            <div class="text-right">
+                <a id="llama-ui-link" href="#" target="_blank"
+                   class="text-sm text-blue-400 hover:underline">Abrir llama-ui / server →</a>
+                <div class="text-xs text-gray-500 mt-1">Backend en {{ config.llama_host }}:{{ config.llama_port }}</div>
+            </div>
+        </header>
+
+        <!-- Estado -->
+        <section id="status-panel" class="bg-gray-800 rounded-xl p-6 mb-6 shadow-lg"
+                 hx-get="/fragments/status" hx-trigger="load, every 3s" hx-swap="innerHTML">
+            <div class="animate-pulse text-gray-400">Cargando estado...</div>
+        </section>
+
+        <!-- Lista de modelos -->
+        <section>
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold">Modelos disponibles</h2>
+                <button hx-get="/fragments/models" hx-target="#models-list" hx-swap="innerHTML"
+                        class="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded transition">
+                    🔄 Refrescar
+                </button>
+            </div>
+
+            <div id="models-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"
+                 hx-get="/fragments/models" hx-trigger="load" hx-swap="innerHTML">
+                <div class="col-span-full text-gray-500">Cargando modelos...</div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // Enlace al backend usando la IP/hostname desde la que se abre el panel
+        document.getElementById('llama-ui-link').href = `http://${window.location.hostname}:{{ config.llama_port }}`;
+
+        // Cuando se pulse "Cargar modelo", marcar visualmente la tarjeta activa
+        document.body.addEventListener('htmx:beforeRequest', function(evt) {
+            const elt = evt.detail.elt;
+            if (elt && elt.tagName === 'FORM' && elt.getAttribute('hx-post') === '/api/switch') {
+                document.querySelectorAll('.model-card').forEach(c => c.classList.remove('active'));
+                elt.closest('.model-card').classList.add('active');
+            }
+        });
+    </script>
+</body>
+</html>

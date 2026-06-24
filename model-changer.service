@@ -1,0 +1,16 @@
+[Unit]
+Description=Model Changer for Llama.cpp
+After=network.target
+
+[Service]
+Type=simple
+User=llama
+Group=llama
+WorkingDirectory=/opt/model-changer
+Environment=MODEL_CHANGER_CONFIG=/opt/model-changer/config.yaml
+ExecStart=/opt/model-changer/venv/bin/uvicorn model_changer.main:app --host 0.0.0.0 --port 8081
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
