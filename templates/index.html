@@ -54,6 +54,14 @@
                         🩺 Diagnóstico
                     </button>
                 </li>
+                <li class="mr-2">
+                    <button hx-get="/fragments/updates-page" hx-target="#tab-content" hx-swap="innerHTML"
+                            onclick="setActiveTab(this)"
+                            class="tab-inactive inline-block py-3 px-4 text-sm font-medium border-b-2 transition"
+                            id="tab-updates">
+                        ⬆️ Actualizaciones
+                    </button>
+                </li>
             </ul>
         </nav>
 

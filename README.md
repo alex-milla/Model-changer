@@ -281,6 +281,25 @@ cmake --build build --config Release -j$(nproc)
 
 El binario quedará en `/opt/llama.cpp/build/bin/llama-server`.
 
+## Actualizaciones desde GitHub
+
+El panel incluye una pestaña **⬆️ Actualizaciones** que:
+
+- Comprueba la **última release publicada** en GitHub (`update_repo_owner`/`update_repo_name` de `config.yaml`; fallback al último tag si no hay releases).
+- Descarga el ZIP de la release y **sincroniza por manifiesto SHA-256**: copia solo ficheros nuevos o cambiados y borra los obsoletos gestionados (`backups/.manifest.json`).
+- **Nunca toca tus datos**: `config.yaml`, `model_profiles.yaml`, `.env`, `env/` y `logs/` quedan fuera de la sincronización y de los backups.
+- Crea un **backup del código** en `backups/backup_<fecha>/` antes de cada operación (se conservan los 15 más recientes) y permite **restaurarlo** desde la tabla de backups.
+- Tras instalar, usa el botón **Reiniciar servicio** para que el panel ejecute el código nuevo.
+
+La versión instalada se guarda en `VERSION`. Para publicar una actualización: bump de `VERSION`, commit, tag `vX.Y.Z` y GitHub Release sobre ese tag.
+
+El token de GitHub es opcional (solo sube el rate limit o para repos privados): se lee de la variable `GITHUB_TOKEN` o de un fichero `env/github.token`.
+
+```bash
+# Smoke test del actualizador (safe: trabaja sobre directorios temporales)
+python tests/smoke_updater.py
+```
+
 ## Licencia
 
 MIT / libre. Úsalo como quieras.

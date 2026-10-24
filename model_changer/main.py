@@ -1,10 +1,14 @@
 """Aplicación FastAPI del gestor de modelos."""
 import os
+import re
 import logging
 import shlex
+import shutil
+import tempfile
 from pathlib import Path
 from typing import List
 
+import httpx
 import psutil
 import yaml
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -13,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .server_manager import LlamaServerManager
+from . import updater
 
 
 # Configurar logging
@@ -38,6 +43,152 @@ templates = Jinja2Templates(directory="templates")
 static_dir = Path("static")
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# --- Sistema de actualizaciones desde GitHub ---------------------------------
+
+CONFIG_DIR = Path(CONFIG_PATH).resolve().parent
+APP_ROOT = CONFIG_DIR  # la app se actualiza in-situ, donde vive config.yaml
+
+UPDATE_REPO_OWNER = raw_config.get("update_repo_owner", "alex-milla")
+UPDATE_REPO_NAME = raw_config.get("update_repo_name", "Model-changer")
+VERSION_FILE = APP_ROOT / "VERSION"
+BACKUP_BASE = (APP_ROOT / str(raw_config.get("backups_dir", "./backups"))).resolve()
+MANIFEST_PATH = BACKUP_BASE / ".manifest.json"
+GITHUB_API = "https://api.github.com"
+
+
+def _github_token() -> str:
+    """Token opcional: variable de entorno o fichero en ``env/`` (fuera del repo)."""
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        return token
+    for name in (".env.txt", "github.token", "github_token", "GITHUB_TOKEN"):
+        token_file = APP_ROOT / "env" / name
+        if token_file.is_file():
+            token = token_file.read_text(encoding="utf-8").strip()
+            if token:
+                return token
+    return ""
+
+
+def _installed_version() -> str:
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip() or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+def _version_key(version: str):
+    """Clave de comparación semver: 'v1.4.4' -> (1, 4, 4)."""
+    return tuple(int(p) for p in re.findall(r"\d+", version.strip().lstrip("vV")))
+
+
+def _github_headers() -> dict:
+    headers = {"Accept": "application/vnd.github+json"}
+    token = _github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+async def get_latest_release() -> dict:
+    """Última release publicada; fallback al último tag si no hay releases."""
+    repo = f"{UPDATE_REPO_OWNER}/{UPDATE_REPO_NAME}"
+    async with httpx.AsyncClient(timeout=15, headers=_github_headers(), follow_redirects=True) as client:
+        resp = await client.get(f"{GITHUB_API}/repos/{repo}/releases/latest")
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "repo": repo,
+                "tag": data.get("tag_name", ""),
+                "name": data.get("name", ""),
+                "published_at": data.get("published_at", ""),
+                "notes": data.get("body", ""),
+                "zip_url": data.get("zipball_url", ""),
+                "html_url": data.get("html_url", ""),
+                "source": "release",
+            }
+        if resp.status_code == 403:
+            return {"error": "Límite de peticiones de la API de GitHub alcanzado (rate limit). "
+                             "Configura un token en env/ para subirlo."}
+        if resp.status_code != 404:
+            return {"error": f"GitHub devolvió {resp.status_code} al consultar la release."}
+
+        # Fallback: sin releases, usar el último tag
+        resp = await client.get(f"{GITHUB_API}/repos/{repo}/tags?per_page=1")
+        if resp.status_code != 200 or not resp.json():
+            return {"error": f"No hay releases ni tags en {repo}."}
+        tag = resp.json()[0].get("name", "")
+        return {
+            "repo": repo,
+            "tag": tag,
+            "name": tag,
+            "published_at": "",
+            "notes": "",
+            "zip_url": f"https://github.com/{repo}/archive/refs/tags/{tag}.zip",
+            "html_url": f"https://github.com/{repo}/releases",
+            "source": "tag",
+        }
+
+
+async def do_update(release: dict) -> dict:
+    """Instala la release: backup -> descarga -> extrae -> sincroniza -> VERSION."""
+    backup = updater.create_backup(APP_ROOT, BACKUP_BASE)
+    if not backup["ok"]:
+        return {"ok": False, "error": f"No se pudo crear el backup: {backup['errors']}"}
+    # Guardar copia del manifiesto dentro del backup: la restauración lo recupera
+    if MANIFEST_PATH.is_file():
+        try:
+            shutil.copy2(MANIFEST_PATH, BACKUP_BASE / backup["dir"] / ".manifest.json")
+        except OSError:
+            pass
+
+    zip_name = f"model-changer-update-{release['tag'].replace('/', '_')}"
+    zip_path = Path(tempfile.gettempdir()) / f"{zip_name}.zip"
+    extract_dir = zip_path.parent / f"{zip_name}-extract"
+    try:
+        async with httpx.AsyncClient(timeout=120, headers=_github_headers(), follow_redirects=True) as client:
+            resp = await client.get(release["zip_url"])
+            if resp.status_code != 200:
+                return {"ok": False, "error": f"Descarga fallida (HTTP {resp.status_code})."}
+            zip_path.write_bytes(resp.content)
+
+        if zip_path.stat().st_size < 1024:
+            return {"ok": False, "error": "El ZIP descargado está vacío o corrupto (< 1 KB)."}
+
+        updater.rrmdir(extract_dir)
+        updater.extract_zip(zip_path, extract_dir)
+        src_root = updater.find_repo_root(extract_dir)
+
+        sync = updater.sync_from_source(src_root, APP_ROOT, MANIFEST_PATH, release["tag"])
+        if sync["errors"]:
+            logging.getLogger("model_changer").warning(
+                "Actualización con errores parciales: %s", sync["errors"])
+
+        if sync["copied"] + sync["deleted"] == 0:
+            return {"ok": True, "updated": False, "backup": backup["dir"],
+                    "message": "No había nada que actualizar.", **sync}
+
+        VERSION_FILE.write_text(release["tag"] + "\n", encoding="utf-8")
+        return {"ok": True, "updated": True, "backup": backup["dir"],
+                "message": f"Actualizado a {release['tag']}.", **sync}
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"Error de red durante la actualización: {exc}"}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": f"Error durante la actualización: {exc}"}
+    finally:
+        zip_path.unlink(missing_ok=True)
+        updater.rrmdir(extract_dir)
+
+
+def list_backups(limit: int = 15) -> list:
+    """Backups disponibles, más recientes primero."""
+    if not BACKUP_BASE.is_dir():
+        return []
+    found = [d.name for d in BACKUP_BASE.iterdir()
+             if d.is_dir() and updater.BACKUP_NAME_RE.match(d.name)]
+    return sorted(found, reverse=True)[:limit]
 
 
 def status_to_dict(status):
@@ -305,6 +456,97 @@ async def fragment_models_page():
 @app.get("/fragments/diagnostics-page", response_class=HTMLResponse)
 async def fragment_diagnostics_page():
     return HTMLResponse(_render_diagnostics_page())
+
+
+# Actualizaciones desde GitHub -----------------------------------------------
+
+@app.get("/api/update/status")
+async def api_update_status():
+    release = await get_latest_release()
+    installed = _installed_version()
+    up_to_date = False
+    if release.get("tag"):
+        up_to_date = _version_key(installed) >= _version_key(release["tag"])
+    return {
+        "repo": f"{UPDATE_REPO_OWNER}/{UPDATE_REPO_NAME}",
+        "installed_version": installed,
+        "latest": release,
+        "up_to_date": up_to_date,
+        "backups": list_backups(),
+    }
+
+
+@app.get("/api/update/backups")
+async def api_update_backups():
+    return {"backups": list_backups()}
+
+
+@app.post("/api/update/install", response_class=HTMLResponse)
+async def api_update_install(force: str = Form("")):
+    release = await get_latest_release()
+    if not release.get("tag"):
+        return HTMLResponse(_render_update_error(release.get("error", "No se encontró ninguna release.")))
+
+    installed = _installed_version()
+    is_force = _to_bool(force)
+    if not is_force and _version_key(installed) >= _version_key(release["tag"]):
+        return HTMLResponse(_render_update_error(f"Ya estás en la última versión ({installed})."))
+
+    result = await do_update(release)
+    if result.get("ok"):
+        logging.getLogger("model_changer").info("Actualización instalada: %s", release["tag"])
+    return HTMLResponse(_render_update_result(result, release))
+
+
+@app.post("/api/update/restore", response_class=HTMLResponse)
+async def api_update_restore(backup: str = Form(...)):
+    # Anti path-traversal: nombre validado y realpath dentro de BACKUP_BASE
+    if not updater.BACKUP_NAME_RE.match(backup or ""):
+        return HTMLResponse(_render_update_error("Nombre de backup inválido."))
+    backup_dir = (BACKUP_BASE / backup).resolve()
+    try:
+        backup_dir.relative_to(BACKUP_BASE.resolve())
+    except ValueError:
+        return HTMLResponse(_render_update_error("Backup fuera de la carpeta permitida."))
+    if not backup_dir.is_dir():
+        return HTMLResponse(_render_update_error(f"No existe el backup {backup}."))
+
+    result = updater.restore_backup(backup_dir, APP_ROOT, BACKUP_BASE)
+    # Recuperar el manifiesto guardado en el backup para dejar el estado consistente
+    backup_manifest = backup_dir / ".manifest.json"
+    if backup_manifest.is_file():
+        try:
+            shutil.copy2(backup_manifest, MANIFEST_PATH)
+        except OSError:
+            pass
+    if result.get("ok"):
+        logging.getLogger("model_changer").info("Backup restaurado: %s", backup)
+    return HTMLResponse(_render_restore_result(result, backup))
+
+
+@app.get("/fragments/updates-page", response_class=HTMLResponse)
+async def fragment_updates_page():
+    return HTMLResponse(_render_updates_page())
+
+
+@app.get("/fragments/updates", response_class=HTMLResponse)
+async def fragment_updates():
+    return HTMLResponse(await _render_updates())
+
+
+@app.post("/fragments/service-restart", response_class=HTMLResponse)
+async def fragment_service_restart():
+    """Reinicio del servicio que devuelve HTML para los paneles HTMX."""
+    result = manager.restart_service()
+    if result.get("ok"):
+        return HTMLResponse("""
+        <div class="bg-blue-900/50 border border-blue-700 rounded-xl p-4 text-blue-300">
+            🔄 Reinicio del servicio solicitado. El panel se quedará unos segundos sin responder.
+        </div>""")
+    return HTMLResponse(f"""
+    <div class="bg-red-900/50 border border-red-700 rounded-xl p-4 text-red-300">
+        ⚠ No se pudo reiniciar el servicio: {result.get('error', 'requiere permisos sudo')}
+    </div>""")
 
 
 def _render_status(status):
@@ -762,4 +1004,241 @@ def _render_diagnostics_page():
     <section class="bg-gray-800 rounded-xl p-6 shadow-lg">
         {diagnostics_html}
     </section>
+    """
+
+
+# Renders de la pestaña Actualizaciones ----------------------------------------
+
+def _render_updates_page():
+    return """
+    <div hx-get="/fragments/updates" hx-trigger="load" hx-swap="innerHTML">
+        <div class="animate-pulse text-gray-400">Comprobando actualizaciones...</div>
+    </div>
+    """
+
+
+async def _render_updates():
+    installed = _installed_version()
+    release = await get_latest_release()
+    error = release.get("error")
+    latest_tag = release.get("tag", "")
+    up_to_date = bool(latest_tag) and _version_key(installed) >= _version_key(latest_tag)
+
+    if error:
+        banner = f"""
+        <div class="bg-red-900/50 border border-red-700 rounded-xl p-4 mb-4 text-red-300">
+            ⚠ {error}
+        </div>"""
+    elif up_to_date:
+        banner = f"""
+        <div class="bg-green-900/50 border border-green-700 rounded-xl p-4 mb-4 text-green-300">
+            ✅ Estás en la última versión ({installed}).
+        </div>"""
+    else:
+        banner = f"""
+        <div class="bg-blue-900/50 border border-blue-700 rounded-xl p-4 mb-4 text-blue-300">
+            🔄 Hay una actualización disponible: <strong>{latest_tag}</strong> (instalada: {installed}).
+        </div>"""
+
+    notes = (release.get("notes") or "").strip()
+    notes_html = ""
+    if notes:
+        import html as html_mod
+        notes_html = f"""
+        <details class="bg-gray-900 border border-gray-700 rounded p-3 mt-4">
+            <summary class="text-sm text-green-300 cursor-pointer">Notas de la release</summary>
+            <pre class="text-xs text-gray-300 whitespace-pre-wrap mt-2">{html_mod.escape(notes)}</pre>
+        </details>"""
+
+    published = (release.get("published_at") or "").replace("T", " ").replace("Z", " UTC")
+    source_label = "release" if release.get("source") == "release" else "último tag"
+    install_label = "Instalar actualización" if not up_to_date else "Reinstalar (forzar)"
+
+    backups = list_backups()
+    backup_rows = ""
+    for name in backups:
+        backup_rows += f"""
+        <tr class="border-b border-gray-700">
+            <td class="py-1.5 px-2 text-xs font-mono">{name}</td>
+            <td class="py-1.5 px-2 text-right">
+                <button hx-post="/api/update/restore" hx-vals='{{"backup": "{name}"}}' hx-target="#updates-panel" hx-swap="innerHTML"
+                        class="px-2 py-1 text-xs bg-yellow-700 hover:bg-yellow-600 rounded transition"
+                        onclick="return confirm('¿Restaurar el backup {name}? Se hará un backup del estado actual antes.')">
+                    Restaurar
+                </button>
+            </td>
+        </tr>"""
+    if not backup_rows:
+        backup_rows = '<tr><td colspan="2" class="py-2 px-2 text-xs text-gray-500">Todavía no hay backups.</td></tr>'
+
+    return f"""
+    <div id="updates-panel" class="space-y-4">
+        {banner}
+
+        <section class="bg-gray-800 rounded-xl p-6 shadow-lg">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold">⬆️ Actualizaciones</h2>
+                <button hx-get="/fragments/updates" hx-target="#updates-panel" hx-swap="innerHTML"
+                        class="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 rounded transition">
+                    🔄 Comprobar
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div class="bg-gray-900 border border-gray-700 rounded p-3">
+                    <span class="text-gray-400">Repositorio:</span>
+                    <a class="text-blue-400 hover:underline" href="https://github.com/{release.get('repo', f'{UPDATE_REPO_OWNER}/{UPDATE_REPO_NAME}')}" target="_blank">
+                        {release.get('repo', f'{UPDATE_REPO_OWNER}/{UPDATE_REPO_NAME}')}
+                    </a>
+                </div>
+                <div class="bg-gray-900 border border-gray-700 rounded p-3">
+                    <span class="text-gray-400">Versión instalada:</span>
+                    <span class="font-mono text-green-300">{installed}</span>
+                </div>
+                <div class="bg-gray-900 border border-gray-700 rounded p-3">
+                    <span class="text-gray-400">Última publicada ({source_label}):</span>
+                    <span class="font-mono text-blue-300">{latest_tag or '-'}</span>
+                    <span class="text-xs text-gray-500">{published}</span>
+                </div>
+                <div class="bg-gray-900 border border-gray-700 rounded p-3">
+                    <span class="text-gray-400">Token GitHub:</span>
+                    <span class="{'text-green-400' if _github_token() else 'text-gray-500'}">
+                        {'configurado' if _github_token() else 'no configurado (solo necesario para repos privados o rate limit)'}
+                    </span>
+                </div>
+            </div>
+            {notes_html}
+
+            <div class="flex flex-wrap gap-2 mt-5">
+                <button hx-post="/api/update/install" hx-target="#updates-panel" hx-swap="innerHTML"
+                        class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-medium transition"
+                        onclick="return confirm('¿Instalar {latest_tag or 'la última versión'}? Se creará un backup antes de aplicar cambios.')">
+                    ⬇️ {install_label}
+                </button>
+                <button hx-post="/api/update/install" hx-vals='{{"force": "true"}}' hx-target="#updates-panel" hx-swap="innerHTML"
+                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition"
+                        onclick="return confirm('¿Reinstalar por la fuerza {latest_tag or 'la última versión'}? Se sobrescribirán los ficheros gestionados (con backup previo).')">
+                    🔁 Reinstalar forzado
+                </button>
+                <button hx-post="/fragments/service-restart" hx-target="#updates-panel" hx-swap="innerHTML"
+                        class="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded-lg font-medium transition"
+                        onclick="return confirm('¿Reiniciar el servicio Model Changer para aplicar el nuevo código?')">
+                    🔄 Reiniciar servicio
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-3">
+                Tras instalar, usa <em>Reiniciar servicio</em> para que el panel ejecute el código nuevo.
+                Tus ficheros <code>config.yaml</code>, <code>model_profiles.yaml</code>, <code>env/</code> y <code>logs/</code> nunca se tocan.
+            </p>
+        </section>
+
+        <section class="bg-gray-800 rounded-xl p-6 shadow-lg">
+            <h2 class="text-lg font-semibold mb-3">📦 Backups</h2>
+            <table class="w-full text-left">
+                <thead>
+                    <tr class="border-b border-gray-600 text-xs text-gray-400">
+                        <th class="py-1 px-2">Backup</th>
+                        <th class="py-1 px-2 text-right">Acción</th>
+                    </tr>
+                </thead>
+                <tbody>{backup_rows}</tbody>
+            </table>
+            <p class="text-xs text-gray-500 mt-2">Se conservan los {updater.DEFAULT_MAX_BACKUPS} más recientes. Los backups excluyen tus datos de usuario.</p>
+        </section>
+    </div>
+    """
+
+
+def _render_update_error(message: str) -> str:
+    return f"""
+    <div id="updates-panel" class="space-y-4">
+        <div class="bg-red-900/50 border border-red-700 rounded-xl p-4 text-red-300">⚠ {message}</div>
+        <div>
+            <button hx-get="/fragments/updates" hx-target="#updates-panel" hx-swap="innerHTML"
+                    class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition">
+                ← Volver
+            </button>
+        </div>
+    </div>
+    """
+
+
+def _render_update_result(result: dict, release: dict) -> str:
+    if not result.get("ok"):
+        return _render_update_error(result.get("error", "Error desconocido durante la actualización."))
+
+    if not result.get("updated"):
+        return f"""
+        <div id="updates-panel" class="space-y-4">
+            <div class="bg-gray-700/50 border border-gray-600 rounded-xl p-4 text-gray-200">
+                ℹ {result.get('message', 'No había nada que actualizar.')}
+                <span class="text-xs text-gray-400">(backup: {result.get('backup', '-')})</span>
+            </div>
+            <div>
+                <button hx-get="/fragments/updates" hx-target="#updates-panel" hx-swap="innerHTML"
+                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition">
+                    ← Volver
+                </button>
+            </div>
+        </div>"""
+
+    errors = result.get("errors") or []
+    errors_html = ""
+    if errors:
+        import html as html_mod
+        items = "".join(f"<li>{html_mod.escape(e)}</li>" for e in errors[:10])
+        errors_html = f"""
+        <div class="bg-yellow-900/50 border border-yellow-700 rounded-xl p-4 mt-3 text-yellow-300">
+            <strong>Errores parciales:</strong>
+            <ul class="list-disc list-inside text-xs mt-1">{items}</ul>
+        </div>"""
+
+    return f"""
+    <div id="updates-panel" class="space-y-4">
+        <div class="bg-green-900/50 border border-green-700 rounded-xl p-4 text-green-300">
+            ✅ {result.get('message', 'Actualización instalada.')}
+            <div class="text-xs text-green-200/80 mt-1">
+                Copiados: {result.get('copied', 0)} · Sin cambios: {result.get('skipped', 0)} ·
+                Borrados: {result.get('deleted', 0)} · Backup: {result.get('backup', '-')}
+            </div>
+        </div>
+        {errors_html}
+        <div class="flex flex-wrap gap-2">
+            <button hx-post="/fragments/service-restart" hx-target="#updates-panel" hx-swap="innerHTML"
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition"
+                    onclick="return confirm('¿Reiniciar el servicio Model Changer para aplicar el código nuevo?')">
+                🔄 Reiniciar servicio
+            </button>
+            <button hx-get="/fragments/updates" hx-target="#updates-panel" hx-swap="innerHTML"
+                    class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition">
+                ← Volver
+            </button>
+        </div>
+    </div>
+    """
+
+
+def _render_restore_result(result: dict, backup: str) -> str:
+    if not result.get("ok"):
+        return _render_update_error(f"No se pudo restaurar {backup}: {result.get('errors')}")
+
+    pre = (result.get("pre") or {}).get("dir", "-")
+    return f"""
+    <div id="updates-panel" class="space-y-4">
+        <div class="bg-green-900/50 border border-green-700 rounded-xl p-4 text-green-300">
+            ✅ Backup <span class="font-mono">{backup}</span> restaurado ({result.get('copied', 0)} ficheros).
+            <div class="text-xs text-green-200/80 mt-1">Backup previo del estado actual: {pre}</div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <button hx-post="/fragments/service-restart" hx-target="#updates-panel" hx-swap="innerHTML"
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition"
+                    onclick="return confirm('¿Reiniciar el servicio Model Changer?')">
+                🔄 Reiniciar servicio
+            </button>
+            <button hx-get="/fragments/updates" hx-target="#updates-panel" hx-swap="innerHTML"
+                    class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition">
+                ← Volver
+            </button>
+        </div>
+    </div>
     """
